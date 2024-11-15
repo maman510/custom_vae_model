@@ -1,0 +1,68 @@
+Summary of Key Methods of MODEL
+===============================
+    Model Lifecycle Methods:
+        __init__(self, ...) – Initialize layers and state variables.
+        build(self, input_shape) – Define and initialize model weights.
+        call(self, inputs, ...) – Define the forward pass (core computation).
+
+    Training and Evaluation:
+        compile(self, ...) – Define optimizer, loss, and metrics.
+        fit(self, ...) – Train the model.
+        evaluate(self, ...) – Evaluate the model on data.
+        predict(self, ...) – Make predictions.
+
+    Saving/Loading Weights:
+        get_config(self) – Return a dictionary configuration of the model.
+        save(self, ...) – Save the model to a file.
+        load_weights(self, ...) – Load pre-trained weights.
+
+
+
+Summary of Key Methods for Subclassed Layers:
+===============================================
+
+    - __init__(self, ...): Initialize layer parameters.
+
+    - build(self, input_shape): Define weights and variables.
+
+    - call(self, inputs): Define layer logic (forward pass).
+
+    - compute_output_shape(self, input_shape): Calculate output shape.
+
+    - compute_mask(self, inputs, mask=None): Handle masking (used in some sequence models).
+
+    - get_config(self): Serialize the layer configuration.
+
+    - from_config(cls, config): Deserialize the layer from a configuration.
+
+    - get_weights(self): Get the layer's weights.
+
+    - set_weights(self, weights): Set the layer's weights.
+
+    - add_weight(...): Helper for creating trainable weights.
+
+
+Built-in Methods of tf.keras.metrics.Metric Class
+=================================================
+
+
+When you subclass tf.keras.metrics.Metric, your custom metric can override the following built-in methods. Here's a list of the most common methods that you can use or override:
+
+    __init__(self, name='metric_name', **kwargs):
+        This is the constructor method, where you initialize the state variables (e.g., the variables that track the metric value). The name argument is the name of the metric, and kwargs are additional arguments passed from the parent class.
+
+    update_state(self, y_true, y_pred, sample_weight=None):
+        This method is called to update the state of the metric during training. It receives the true values y_true, the predicted values y_pred, and optionally, sample_weight (for weighted metrics). You typically implement the logic for metric calculation here.
+        This method must update the state variables of the metric (e.g., sum, count, etc.).
+
+    result(self):
+        This method returns the current result of the metric. It is called at the end of each epoch or batch to compute the final value of the metric based on the state variables updated in update_state.
+
+    reset_states(self):
+        This method resets the state variables of the metric. It is called at the start of each epoch to ensure that the metric is calculated fresh. For example, the total sum of errors should be reset before calculating metrics for the next epoch.
+
+    get_config(self):
+        This method returns the configuration of the metric, which can be useful for serializing the metric. It should return a dictionary that contains the configuration of the metric. For custom metrics, this method is often implemented if you need to save and load the model with the custom metric.
+
+    from_config(cls, config):
+        This class method is used for deserializing the metric from its configuration. This is useful when loading a saved model that includes a custom metric.
