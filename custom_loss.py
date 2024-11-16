@@ -2,9 +2,10 @@ import tensorflow as tf
 from keras import backend as K
 
 class VAELoss(tf.keras.losses.Loss):
-    def __init__(self, encoder, **kwargs):
+    def __init__(self, encoder, kl_beta=1, **kwargs):
         super(VAELoss, self).__init__(**kwargs)
         self.encoder = encoder  # The encoder model to perform the forward pass
+        self.kl_beta = kl_beta
 
     def call(self, y_true, y_pred):
         # Perform forward pass through encoder
@@ -19,7 +20,7 @@ class VAELoss(tf.keras.losses.Loss):
         )
 
         # Return both the total loss (for optimization) and the individual components (for metrics)
-        return reconstruction_loss #+ kl_loss  # Total loss for optimization, single tensor
+        return reconstruction_loss +  (kl_loss * self.kl_beta)  # Total loss for optimization, single tensor
 
 
 
@@ -41,8 +42,9 @@ class ReconstructionLossMetric(tf.keras.metrics.Metric):
 
 
 class KLDivergenceMetric(tf.keras.metrics.Metric):
-    def __init__(self, name='kl_divergence', **kwargs):
+    def __init__(self, beta=1, name='kl_divergence', **kwargs):
         super(KLDivergenceMetric, self).__init__(name=name, **kwargs)
+        self.beta = beta
         self.total_kl_loss = self.add_weight(name='total_kl_loss', initializer='zeros')
 
     def update_state(self, z_mean, z_log_var, sample_weight=None):
@@ -50,6 +52,7 @@ class KLDivergenceMetric(tf.keras.metrics.Metric):
         kl_loss = -0.5 * K.mean(
             1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1
         )
+        kl_loss = kl_loss * self.beta
         self.total_kl_loss.assign_add(K.mean(kl_loss))
 
     def result(self):

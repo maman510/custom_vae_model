@@ -4,18 +4,32 @@ import keras.layers
 import keras
 import tool_box
 import numpy as np
+import time
+# from sklearn.decomposition import PCA
+
+# # Assume 'image_data' is a batch of images as numpy array (e.g., shape (batch_size, 28, 28, 1))
+
+# # Step 1: Apply PCA to reduce dimensionality
+# pca = PCA(n_components=50)
+# image_data_flattened = image_data.reshape(-1, 28*28)  # Flatten the images
+# image_data_pca = pca.fit_transform(image_data_flattened)
+
+# # Step 2: Define the VAE architecture
+# latent_dim = 2  # Dimension of the latent space (could be higher for more complex models)
 
 
 class Encoder(keras.Model):
 
-    def __init__(self, latent_dims, filters, target_image_size=None):
+    def __init__(self, latent_dims, filters, image_resize_target=None):
         super(Encoder, self).__init__(name="encoder")
         self.latent_dims = latent_dims
         self.filters = filters
-        self.target_image_size = target_image_size
-
+        self.image_resize_target = image_resize_target
+       
+        self._input_shape = (*self.image_resize_target, 3)
 
     def build(self, input_shape):
+
         #combine conv and pool into single array for correct layer stack order (e.g. [conv2d, pool, conv2d, pool...])
         self.transformation_layers = []
         for i in range(len(self.filters)):
@@ -28,7 +42,7 @@ class Encoder(keras.Model):
             )
             self.transformation_layers.append(keras.layers.BatchNormalization())
             
-            self.transformation_layers.append(keras.layers.AveragePooling2D(pool_size=(2,2),
+            self.transformation_layers.append(keras.layers.MaxPooling2D(pool_size=(2,2),
                                                                  padding="same",
                                                                  name=f"encoder_pooling_layer_{i+1}"
                                                                  )
@@ -45,12 +59,21 @@ class Encoder(keras.Model):
         self.output_layer = keras.layers.Lambda(self._sampling, name="encoder_output_layer")
         super(Encoder, self).build(input_shape)
 
+
+
     def call(self, inputs):
-        if self.target_image_size != None:
-            inputs = tf.image.resize(inputs, self.target_image_size, method="lanczos5")
-            inputs = tf.cast(inputs, dtype=tf.float32)  
-        x = inputs
-        for i in range(len(self.transformation_layers)):
+
+
+        if self.image_resize_target != None:
+            inputs = tf.image.resize(inputs, self.image_resize_target, method="lanczos5")
+            x = tf.cast(inputs, dtype=tf.float32)
+        else:
+
+            x = inputs
+
+        print(tool_box.color_string('cyan', f"\n\nENCODER FILTERS: {self.filters}\n\nENCODER INPUT SHAPE: {x.shape}\n\n"))
+      #  time.sleep(3)
+        for i in range(1,len(self.transformation_layers)):
             x = self.transformation_layers[i](x)
     
         self.shape_before_bottleneck = x.shape[1:]
@@ -70,6 +93,11 @@ class Encoder(keras.Model):
 
 
 
+ # self.pca = PCA(n_components=50)
 
+        # if self.target_image_size != None:
+        #     inputs = tf.image.resize(inputs, self.target_image_size, method="lanczos5")
+        #     inputs = tf.cast(inputs, dtype=tf.float32)
 
-
+    #   image_data_flattened = inputs.reshape(-1, self._input_shape[0], self._input_shape[1])  # Flatten the images
+    #     image_data_pca = self.pca.fit_transform(image_data_flattened)
