@@ -1,3 +1,4 @@
+import keras.callbacks
 import keras.optimizers
 from custom_encoder import Encoder
 from custom_decoder import Decoder
@@ -57,7 +58,7 @@ class VAE(keras.Model):
         print(f"\n\n{self.summary_table}\n\n")
 
 
-    def run_training(self, x_train, x_test, optimizer,  epochs, kl_beta=1, learning_rate=None, batch_size=1, reshape_dims=None):
+    def run_training(self, x_train, x_test, optimizer,  epochs, kl_beta=1, learning_rate=None, batch_size=1, reshape_dims=None, callbacks=None):
         #normalize train and test data
         x_train = x_train.astype("float32") / 255.0
         x_test = x_test.astype("float32") / 255.0
@@ -83,7 +84,7 @@ class VAE(keras.Model):
         self.compile(optimizer=optimizer, loss=vae_loss, metrics=[ReconstructionLossMetric(), KLDivergenceMetric(beta=kl_beta)])
         
         self.summary()
-        return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test))
+        return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test), callbacks=callbacks)
 
 
 
@@ -93,10 +94,20 @@ class VAE(keras.Model):
 
 latent_dims = 256
 vae = VAE(latent_dims=latent_dims)
-batch_size = 256
+batch_size = 512
 reshape_dims = (64,64)
 kl_beta = 0.1
-vae.run_training(x_train=x_train, x_test=x_test,optimizer="adam",reshape_dims=reshape_dims, epochs=10, kl_beta=kl_beta, learning_rate=0.001, batch_size=56)
+epochs = 500
+cb = [keras.callbacks.EarlyStopping(monitor="loss", min_delta=0.0001, patience=5, mode="min")]
+vae.run_training(x_train=x_train, 
+                 x_test=x_test,
+                 optimizer="adam", 
+                 epochs=epochs, 
+                 kl_beta=kl_beta, 
+                 learning_rate=0.001, 
+                 batch_size=56,
+                 callbacks=cb
+                )
 
 
 
