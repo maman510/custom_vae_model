@@ -57,6 +57,63 @@ class VAE(keras.Model):
         self.summary_table = tabulate(table, headers, tablefmt="fancy_grid")
         print(f"\n\n{self.summary_table}\n\n")
 
+    def _check_loss(self, epochs, logs):
+        'callback mimics EarlyStop by checking min_delta and patience against current and past epoch data - avoids restarting while allowing update to weights'
+        if self.current_val_loss == None:
+            self.current_val_loss = logs["loss"]
+            display = f"\n\nIN CHECK LOSSES - INITIAL LOSS\n\n"
+            print(tool_box.color_string('cyan', display))
+            return self._update_losses(logs, update_weights=False)
+        else:
+            epoch_val_loss = logs["loss"]
+            delta = self.current_val_loss - epoch_val_loss
+            print(tool_box.color_string('white', f"\n\nCURRENT_VAL_LOSS: {epoch_val_loss}; PREVIOUS VAL_LOSS: {self.current_val_loss}; DELTA: {delta}; min_delta: {self.min_delta}\n\n"))
+            if delta < self.min_delta:
+                #handle min_delta and patience compromise
+
+                if self.current_patience_count >= self.patience:
+                    #handle update weights here
+                    display = f"\n\nIN CHECK LOSSES - TRIGGERING WEIGHT UPDATE\n\n"
+                    self.current_patience_count = 0
+                    self.current_val_loss = epoch_val_loss
+                    print(tool_box.color_string('red', display))
+                    return self._update_losses(logs, update_weights=True)
+                else:
+                    #handle incrementing patience only
+                    self.current_val_loss = epoch_val_loss
+                    self.current_patience_count += 1
+                    display = f"\n\nIN CHECK LOSSES - MIN DELTA THRESHOLD MET; UPDATING PATIENCE COUNT: {self.current_patience_count}\n"
+                    print(tool_box.color_string('yellow', display))
+                    return self._update_losses(logs, update_weights=False)
+            else:
+                #handle regular epoch output (no min_delta)
+                print(tool_box.color_string('green', f"\n\nIN _UPDATE_LOSSES - ADDING NEW LOSSES FROM EPOCH...\n\n"))
+                return self._update_losses(logs, update_weights=False)
+
+    def _update_losses(self, logs, update_weights):
+        '''method called by self._check_losses - updates aggregated losses and update kl_beta and recon_weight if needed'''
+        total_loss = logs["loss"]
+        kl_loss = logs["kl_divergence"]
+        recon_loss = logs["reconstruction_loss"]
+
+        if update_weights == False:
+            #scale losses and add to aggregate here
+            self.current_total_losses.append(total_loss)
+            self.current_kl_val_losses.append(kl_loss)
+            self.current_reconstruction_val_losses.append(recon_loss)
+            display = f"\n\nIN _UPDATE_LOSSES - LOSSES UPDATED\n\nKL: {self.current_kl_val_losses}\tRECON: {self.current_reconstruction_val_losses}\tTOTAL: {self.current_total_losses}\n\n"
+            print(tool_box.color_string('yellow', display))
+            return None
+        else:
+            #handle update here
+            display = f"\n\nIN _UPDATE_LOSSES; MIN_DELTA AND PATIENCE THRESHOLD MET....UPDATING WEIGHTS...."
+            self.current_total_losses.append(total_loss)
+            self.current_kl_val_losses.append(kl_loss)
+            self.current_reconstruction_val_losses.append(recon_loss)
+            print(tool_box.color_string('cyan', display))
+            return None
+            #check sum(self.current_total_loss) against sum(kl_loss) and sum(recon_loss) to see proportions; NOTE: losses are scaled so comparison
+
 
     def run_training(self, x_train, x_test, optimizer,  epochs, kl_beta=1, learning_rate=None, batch_size=1, reshape_dims=None, callbacks=None):
         #normalize train and test data
@@ -79,22 +136,40 @@ class VAE(keras.Model):
             else:
                 optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
 
-        #configure custom loss and compile
-        vae_loss = VAELoss(encoder=self.encoder, kl_beta=kl_beta)
-        self.compile(optimizer=optimizer, loss=vae_loss, metrics=[ReconstructionLossMetric(), KLDivergenceMetric(beta=kl_beta)])
+        #initiate loss params
+        kl_beta = 1.0
+        reconstruction_weight = 1.0
+        # self.current_kl_val_loss = None
+        # self.current_reconstruction_val_loss = None
+
+        self.min_delta = 0.1
+        self.patience = 5
+        self.current_val_loss = None
+        self.current_patience_count = 0
+
+        self.current_total_losses = []
+        self.current_kl_val_losses = []
+        self.current_reconstruction_val_losses = []
+
+
+
+        self.vae_loss = VAELoss(encoder=self.encoder, kl_beta=kl_beta, reconstruction_weight=reconstruction_weight)
+        self.compile(optimizer=optimizer, loss=self.vae_loss, metrics=[ReconstructionLossMetric(), KLDivergenceMetric(beta=kl_beta)])
         
         self.summary()
-        return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test), callbacks=callbacks)
 
-
+        cb = [
+            keras.callbacks.LambdaCallback(on_epoch_end=lambda epochs, logs: self._check_loss(epochs, logs)),
+            ]
+        return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test), callbacks=cb)
 
 
 
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 
-latent_dims = 256
+latent_dims = 2
 vae = VAE(latent_dims=latent_dims)
-batch_size = 512
+batch_size = 2056
 reshape_dims = (64,64)
 kl_beta = 0.1
 epochs = 500
@@ -106,9 +181,9 @@ vae.run_training(x_train=x_train,
                  kl_beta=kl_beta, 
                  learning_rate=0.001, 
                  batch_size=56,
-                 callbacks=cb
+                 callbacks=cb,
+                #  reshape_dims=reshape_dims
                 )
-
 
 
 

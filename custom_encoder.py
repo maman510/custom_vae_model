@@ -84,7 +84,3 @@ class Encoder(keras.Model):
 
         return filters
     
-input_shape = (64,64,3)
-e = Encoder(2, input_shape)
-e.build((None, *input_shape))
-e.summary()

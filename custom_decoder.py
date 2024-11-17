@@ -68,4 +68,3 @@ class Decoder(keras.Model):
                 layer_count *= 2
 
         return filters[::-1][1:]
-
