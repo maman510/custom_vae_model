@@ -75,12 +75,66 @@ class VAE(keras.Model):
         recon_loss = logs["reconstruction_loss"]
         val_kl_loss = self.current_kl_loss.result() 
         val_recon_loss = self.current_reconstruction_loss.result()
+
+        
         
         kl_beta = self.initial_kl_beta + (self.kl_beta_max - self.initial_kl_beta) * (epoch / self.target_epochs)
+       
         reconstruction_weight = self.initial_reconstruction_weight + (self.reconstruction_weight_max - self.initial_reconstruction_weight) * (epoch / self.target_epochs)
-        print(tool_box.color_string("red", f"\n\n\tkl_loss{kl_loss}\treconstruction_loss: {recon_loss}\ninitial_kl_beta{self.initial_kl_beta}\nreconstruction_weight: {self.reconstruction_weight}"))
+
+        headers = [tool_box.color_string('green', "kl_loss"), 
+                   tool_box.color_string('green', 'reconstruction_loss'), 
+                   tool_box.color_string('green', 'kl_beta'), 
+                   tool_box.color_string('green', 'reconstruction_weight')
+                   ]
         
+        if self.last_kl_loss == None:
+            table = [[str(kl_loss), str(recon_loss), str(kl_beta), str(reconstruction_weight)]]
+            self.last_kl_loss = kl_loss
+            self.last_recon_loss = recon_loss
+        else:
+            kl_change = self.last_kl_loss - kl_loss 
+            recon_change = self.last_recon_loss - recon_loss
+            if kl_loss > self.last_kl_loss:
+                kl_color = "green"
+                kl_change = f"+{kl_change}"
+            else:
+                kl_color = "red"
+                kl_change = f"-{kl_change}"
+
+            if recon_loss > self.last_recon_loss:
+                recon_color = "green"
+                recon_change = f"+{recon_change}"
+            else:
+                recon_color = "red"
+                recon_change = f"-{recon_change}"
+
+            table = [[f"{kl_loss} ({tool_box.color_string(kl_color, kl_change)})", f"{recon_loss} ({tool_box.color_string(recon_color, recon_change)})" , str(kl_beta), str(reconstruction_weight)]]
+        table = tabulate(table, headers=headers, tablefmt="fancy_grid")
+        print(table)
+
         print(logs)
+        print("\n\n")
+        
+        self.last_recon_loss = recon_loss
+        self.last_kl_loss = kl_loss
+
+        #check if kl_loss stabilized for the past target_epoch epochs - stop training then
+        if self.current_epoch_count > 0 and kl_color == "red":
+            #handle decreasing 
+            print(f"\nCHANGE IN KL_LOSS - RESETTING CURRENT EPOCH COUNT TO 0\tLAST COUNT: {self.current_epoch_count}\n")
+            self.current_epoch_count = 0
+
+        
+        elif self.current_epoch_count == self.target_epochs:
+            print(f"\nTARGET EPOCH REACHED TERMINATING TRAINING\n")
+
+            self.stop_training = True
+        else:
+            self.current_epoch_count += 1
+            print(f"\nTARGET EPOCH COUNT INCREASED: {self.target_epochs}\n")
+       
+
         # ratio = kl_loss / recon_loss
 
         # # Decide whether to adjust the weights based on observed losses
@@ -181,11 +235,15 @@ class VAE(keras.Model):
             self.reconstruction_weight_maxself = 1.0
             self.reconstruction_weight_max = 1.0
 
+            
+
             self.target_epochs = target_epochs
             self.current_epoch_count = 0
             self.warm_up_kl_beta = None
             self.warm_up_reconstruction_loss = None
 
+            self.last_kl_loss = None
+            self.last_recon_loss = None
 
             return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test), callbacks=cb, verbose=0)
 
@@ -199,7 +257,7 @@ batch_size = 256
 reshape_dims = (64,64)
 
 epochs = 5000
-target_epochs = 100
+target_epochs = 5
 
 vae.run_training(x_train=x_train, 
                 x_test=x_test,
