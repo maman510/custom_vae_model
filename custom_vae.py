@@ -10,7 +10,7 @@ from custom_loss import VAELoss, KLDivergenceMetric, ReconstructionLossMetric
 from keras.datasets import cifar10
 import random
 import numpy as np
-
+import math
 # Set random seeds for reproducibility
 random.seed(42)  # For Python's built-in random module
 np.random.seed(42)  # For NumPy
@@ -68,127 +68,48 @@ class VAE(keras.Model):
         print(f"\n\n{self.summary_table}\n\n")
 
 
-    def _check_loss(self, epoch, logs):
 
-        #read epoch loss from Metric objects:
-        kl_loss = logs["kl_divergence"]
-        recon_loss = logs["reconstruction_loss"]
-        val_kl_loss = self.current_kl_loss.result() 
-        val_recon_loss = self.current_reconstruction_loss.result()
 
-        
-        
-        kl_beta = self.initial_kl_beta + (self.kl_beta_max - self.initial_kl_beta) * (epoch / self.target_epochs)
-       
-        reconstruction_weight = self.initial_reconstruction_weight + (self.reconstruction_weight_max - self.initial_reconstruction_weight) * (epoch / self.target_epochs)
-
-        headers = [tool_box.color_string('green', "kl_loss"), 
-                   tool_box.color_string('green', 'reconstruction_loss'), 
-                   tool_box.color_string('green', 'kl_beta'), 
-                   tool_box.color_string('green', 'reconstruction_weight')
-                   ]
-        
-        if self.last_kl_loss == None:
-            table = [[str(kl_loss), str(recon_loss), str(kl_beta), str(reconstruction_weight)]]
-            self.last_kl_loss = kl_loss
-            self.last_recon_loss = recon_loss
-        else:
-            kl_change = self.last_kl_loss - kl_loss 
-            recon_change = self.last_recon_loss - recon_loss
-            if kl_loss > self.last_kl_loss:
-                kl_color = "green"
-                kl_change = f"+{kl_change}"
-            else:
-                kl_color = "red"
-                kl_change = f"-{kl_change}"
-
-            if recon_loss > self.last_recon_loss:
-                recon_color = "green"
-                recon_change = f"+{recon_change}"
-            else:
-                recon_color = "red"
-                recon_change = f"-{recon_change}"
-
-            table = [[f"{kl_loss} ({tool_box.color_string(kl_color, kl_change)})", f"{recon_loss} ({tool_box.color_string(recon_color, recon_change)})" , str(kl_beta), str(reconstruction_weight)]]
-        table = tabulate(table, headers=headers, tablefmt="fancy_grid")
-        print(table)
-
-        print(logs)
-        print("\n\n")
-        
-        self.last_recon_loss = recon_loss
-        self.last_kl_loss = kl_loss
-
-        #check if kl_loss stabilized for the past target_epoch epochs - stop training then
-        if self.current_epoch_count > 0 and kl_color == "red":
-            #handle decreasing 
-            print(f"\nCHANGE IN KL_LOSS - RESETTING CURRENT EPOCH COUNT TO 0\tLAST COUNT: {self.current_epoch_count}\n")
-            self.current_epoch_count = 0
-
-        
-        elif self.current_epoch_count == self.target_epochs:
-            print(f"\nTARGET EPOCH REACHED TERMINATING TRAINING\n")
-
-            self.stop_training = True
-        else:
-            self.current_epoch_count += 1
-            print(f"\nTARGET EPOCH COUNT INCREASED: {self.target_epochs}\n")
-       
-
-        # ratio = kl_loss / recon_loss
-
-        # # Decide whether to adjust the weights based on observed losses
-        # if kl_loss > 2 * recon_loss:
-        #     # If KL loss is much larger than reconstruction loss, reduce kl_beta
-        #     print(tool_box.color_string('red',f"\n\nFinal Epoch KL_LOSS (no weight): {kl_loss} Recon Loss (no weight): {recon_loss}; KL_loss weighted: {kl_loss * self.kl_beta}\tRecon Loss weighted: {recon_loss * self.reconstruction_weight}"))
-            
-        #     print(tool_box.color_string('green', f"\nKL Loss much higher than recons loss\tReducing Current KL Beta:\t{self.kl_beta}"))
-            
-        #     self.kl_beta *= 0.1  # Decrease the influence of KL loss
-        
-        #     print(tool_box.color_string('green', f"\nNew KL Beta:\t{self.kl_beta}\n"))
+    # def _update_vae_loss_weights(self, epoch, logs):
+    #     #update weights and current_epoch
+    #     if epoch > 0:
 
            
-        # elif recon_loss > 2 * kl_loss:
-        #     # If reconstruction loss is much larger, increase reconstruction weight
+    #         self.vae_loss.current_epoch = epoch
+    #         current_recon_loss = logs["reconstruction_loss"]
+    #         current_kl_loss = logs["kl_divergence"]
 
-        #     self.reconstruction_weight += 1.1  # Increase the influence of reconstruction loss
-            
-        #     print(tool_box.color_string('red',f"\n\nFinal Epoch KL_LOSS (no weight): {kl_loss} Recon Loss (no weight): {recon_loss}; KL_loss weighted: {kl_loss * self.kl_beta}\tRecon Loss weighted: {recon_loss * self.reconstruction_weight}"))
-        #     print(tool_box.color_string('green', f"\nRecons loss much highter than kl loss\tIncreasing Reconstruction Weight:\t{self.reconstruction_weight}"))
-        #     print(tool_box.color_string('green', f"\nNew Reconstruction Weight:\t{self.reconstruction_weight}"))
-        # else:
-
-            
-        #     if self.current_epoch_count == self.target_epochs:
-        #         #reset current_epoch_count or save 1) self.warm_up_beta 2) self.warm_up_reconstruction_weight 3) save model configs and look up adjustments to reconcile transformations to epoch logs)
-        #         self.current_epoch_count = self.current_epoch_count + 1
-        #         self.warmup_kl_beta = self.kl_beta
-        #         self.warm_up_reconstruction_weight = self.reconstruction_weight
-
-        #         warm_up_data = {"kl_beta": self.warm_up_kl_beta, "reconstruction_weight": self.warm_up_reconstruction_weight}
-        #         save_path = f"warm_up_weights.pkl"
-        #         tool_box.Create_Pkl(save_path, warm_up_data)
-                
-        #         print(tool_box.color_string('green', f"\n\n\nTARGET EPOCHS SATISFIED; SAVING MODEL, BETA, AND RECONSTRUCTION WEIGHTS TO: {save_path} - TERNMINATING TRAINING\n\n"))
-
-        #         self.stop_training = True
-
-        #         #reset if contining
-        #        # self.current_epoch_count = 0
-        
-        #     else:
-        #         self.current_epoch_count = self.current_epoch_count + 1
-        #         print(tool_box.color_string('red',f"\n\nFinal Epoch (target epoch #{self.current_epoch_count} out of {self.target_epochs} \nKL_LOSS (no weight): {kl_loss} Recon Loss (no weight): {recon_loss}; KL_loss weighted: {kl_loss * self.kl_beta}\tRecon Loss weighted: {recon_loss * self.reconstruction_weight}"))
+    #         target_kl = .10 * current_recon_loss
+    #         updated_kl_beta = math.log(target_kl, current_kl_loss)
 
 
 
+    #         self.kl_beta = updated_kl_beta
+       
+    #         self.vae_loss.kl_beta = updated_kl_beta
 
-    def run_training(self, x_train, x_test, optimizer,  epochs, target_epochs, learning_rate=None, batch_size=1, reshape_dims=None, callbacks=None):
+    #         z_log_var = self.vae_loss.z_log_var
+    #         z_mean = self.vae_loss.z_mean
+    #         self.kl_metric.update_state(z_mean, z_log_var, updated_kl_beta)
+    #         display = f"\nEPOCH #{epoch}\tkl_divergence: {logs['kl_divergence'] ** updated_kl_beta}\treconstruction_loss: {logs['reconstruction_loss']} KL_BETA: {updated_kl_beta}\n\n"
+    #         print(tool_box.color_string('green', display))
+        #    print(f"TARGET KL FOR EARLY TRAINING: {target_kl}")
+
+   
+          #  print(f"\n\nUPDATED KL_BETA: {updated_kl_beta}")
+          #  print(f"UPDATED KL LOSS: {current_kl_loss**updated_kl_beta}\n\n")
+
+           # self.vae_loss.call()
+
+
+
+    def run_training(self, x_train, x_test, optimizer,  epochs, learning_rate=None, batch_size=1, reshape_dims=None, callbacks=None):
             #normalize train and test data
             x_train = x_train.astype("float32") / 255.0
             x_test = x_test.astype("float32") / 255.0
+
             if reshape_dims != None:
+
                 print(tool_box.color_string("yellow", f"\nRESHAPING INPUT DATA FROM {x_train.shape[1:]}\tTO\t{(*reshape_dims,3)}....\n"))
                 x_train = tf.image.resize(x_train, reshape_dims, method="lanczos5")
                 x_train = tf.cast(x_train, dtype=tf.float32)
@@ -207,71 +128,55 @@ class VAE(keras.Model):
                 else:
                     optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
 
-            #initiate loss params
-         
+
+            #configure loss and metrics
+
+              
             self.kl_beta = 1.0
             self.reconstruction_weight = 1.0
             self.vae_loss = VAELoss(encoder=self.encoder, kl_beta=self.kl_beta, reconstruction_weight=self.reconstruction_weight)
-                       # self.current_kl_val_loss = None
-
-
-            self.current_reconstruction_loss = ReconstructionLossMetric()
-            self.current_kl_loss = KLDivergenceMetric(beta=self.kl_beta)
-            self.compile(optimizer=optimizer, loss=self.vae_loss, metrics=[self.current_reconstruction_loss, self.current_kl_loss])
+            self.reconstruction_metric = ReconstructionLossMetric()
+            self.kl_metric = KLDivergenceMetric(vae_loss=self.vae_loss)
+            self.compile(optimizer=optimizer, loss=self.vae_loss, metrics=[self.reconstruction_metric, self.kl_metric])
             
             self.summary()
 
-            cb = [
-                keras.callbacks.LambdaCallback(on_epoch_end=lambda epochs, logs: self._check_loss(epochs, logs)),
-                ]
+       
 
-
-
-            #===   set warm_up parameters here ===
-      
-            self.initial_kl_beta = 0.1
-            self.kl_beta_max = 0.1
-            self.initial_reconstruction_weight = 1.0
-            self.reconstruction_weight_maxself = 1.0
-            self.reconstruction_weight_max = 1.0
-
-            
-
-            self.target_epochs = target_epochs
-            self.current_epoch_count = 0
-            self.warm_up_kl_beta = None
-            self.warm_up_reconstruction_loss = None
-
-            self.last_kl_loss = None
-            self.last_recon_loss = None
-
-            return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test), callbacks=cb, verbose=0)
+           # cb = [keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self._update_vae_loss_weights(epoch, logs))]
+            return self.fit(x_train, x_train,batch_size=batch_size, epochs=epochs, validation_data=(x_test, x_test))
 
 
 
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 
-latent_dims = 256
+x_train = x_train[:100]
+x_test = x_test[:100]
+latent_dims = 2
 vae = VAE(latent_dims=latent_dims)
-batch_size = 256
+batch_size = 1
 reshape_dims = (64,64)
 
-epochs = 5000
-target_epochs = 5
+epochs = 500
 
+x_train = x_train
+x_test = x_test
+learning_rate=0.0001
 vae.run_training(x_train=x_train, 
                 x_test=x_test,
                 optimizer="adam", 
                 epochs=epochs,
-                learning_rate=0.0001, 
+                learning_rate=learning_rate, 
                 batch_size=batch_size,
-                target_epochs = target_epochs
                 # callbacks=cb,
                 #  reshape_dims=reshape_dims
 )
 
 
 '''
-Use self.stop_training = True in self._check_loss callback if validation condition met (check for options on good checkpoint)
+TO-DO:
+
+1) update weights on val_kl_loss/val_recon_loss in _check_loss training callback; currently terminates once val_loss stabilizes for self.target_epochs epochs
 
 '''
+
