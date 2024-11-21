@@ -54,43 +54,47 @@ class DynamicVAE(keras.Model):
 
     def _ssim_loss(self, original, reconstructed):
         return 1 - tf.reduce_mean(tf.image.ssim(original, reconstructed, max_val=1.0))
+    
+
+    def _sampling(self, z_mean, z_log_var):
+        epsilon = tf.random.normal(tf.shape(z_mean))
+        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+    
+    def _compute_kl_divergence(self, z_mean, z_log_var):
+        kl_div = -0.5 * tf.reduce_sum(1 + z_log_var - 
+                        tf.square(z_mean) - 
+                        tf.exp(z_log_var), axis=-1)
+        
+        return tf.reduce_mean(kl_div)
+    
+    def _compute_reconstruction_error(self, input_images, reconstructed, delta=1.0):
+        huber_loss = tf.keras.losses.Huber(delta=delta)
+        return huber_loss(input_images, reconstructed)
+    
 
     def combined_loss(self, original, reconstructed, z_mean, z_log_var):
-        mse_loss = tf.reduce_mean(tf.square(original - reconstructed))
+        reconstruction_loss = self._compute_reconstruction_error(original, reconstructed)
         perceptual_loss = self._vgg_loss(original, reconstructed)
         ssim_loss = self._ssim_loss(original, reconstructed)
-        kl_loss = self.compute_kl_divergence(z_mean, z_log_var)
+        kl_loss = self._compute_kl_divergence(z_mean, z_log_var)
 
         #set weights for reconstruction, vgg, and ssim losses
+
         alpha = 1.0 #for reconstruction loss
         beta = 0.1 #for vgg_loss
         gamma = 0.1 #for ssim_loss
 
-        total_loss = (alpha * mse_loss) + (beta * perceptual_loss) + (gamma * ssim_loss) + kl_loss
-        return kl_loss, mse_loss, perceptual_loss, ssim_loss, total_loss
+        total_loss = (alpha * reconstruction_loss) + (beta * perceptual_loss) + (gamma * ssim_loss) + kl_loss
+        return kl_loss, reconstruction_loss, perceptual_loss, ssim_loss, total_loss
     
     def call(self, inputs):
         z_mean, z_log_var = self.encoder(inputs)
-        z = self.sampling(z_mean, z_log_var)
+        z = self._sampling(z_mean, z_log_var)
         reconstructed = self.decoder(z)
         
         return reconstructed, z_mean, z_log_var
     
-    def sampling(self, z_mean, z_log_var):
-        epsilon = tf.random.normal(tf.shape(z_mean))
-        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
-    
-    def compute_kl_divergence(self, z_mean, z_log_var):
-        kl_div = -0.5 * tf.reduce_sum(1 + z_log_var - 
-                        tf.square(z_mean) - 
-                        tf.exp(z_log_var), axis=-1)
-        return tf.reduce_mean(kl_div)
-    
-    def compute_reconstruction_error(self, inputs, reconstructed, delta=1.0):
-        huber_loss = tf.keras.losses.Huber(delta=delta)
-        return huber_loss(inputs, reconstructed)
-    
-
+ 
     def train_step(self, original_images):
         self.current_epoch += 1
         with tf.GradientTape() as tape:
@@ -98,9 +102,9 @@ class DynamicVAE(keras.Model):
             reconstructed, z_mean, z_log_var = self(original_images)
 
             #calculate kl_div and recon error
-           # kl_divergence = self.compute_kl_divergence(z_mean, z_log_var)
-           # reconstruction_error = self.compute_reconstruction_error(original_images, reconstructed)
-            kl_divergence, mse_loss, perceptual_loss, ssim_loss, total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
+
+            kl_divergence, reconstruction_loss, perceptual_loss, ssim_loss, total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
+
             #adjust kl_beta
            # self.kl_beta = self.adjust_kl_beta(reconstruction_error, kl_divergence)
            # total_loss = reconstruction_error + (kl_divergence * self.kl_beta)
@@ -110,7 +114,7 @@ class DynamicVAE(keras.Model):
 
      
 
-        return {"loss": total_loss, "vgg_loss": perceptual_loss , "ssim_loss": ssim_loss, "reconstruction_error": mse_loss, "kl_divergence": kl_divergence}
+        return {"loss": total_loss, "vgg_loss": perceptual_loss , "ssim_loss": ssim_loss, "reconstruction_error": reconstruction_loss, "kl_divergence": kl_divergence}
     
 
     def _check_update(self, recon_error):
@@ -128,9 +132,7 @@ class DynamicVAE(keras.Model):
         return current_recon_level
 
 
-     
-   
-      
+
     def adjust_kl_beta(self, reconstruction_error, kl_divergence):
         #find what stage of training loop is
         recon_level = self._check_update(reconstruction_error)
@@ -214,7 +216,7 @@ latent_dim = 32
 encoder = build_encoder(input_shape, latent_dim)
 decoder = build_decoder(latent_dim, input_shape)
 
-epochs=200
+epochs=100
 
 vae = DynamicVAE(encoder, decoder, training_epoch_count=epochs)
 lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -229,7 +231,7 @@ optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
 vae.compile(optimizer=optimizer)
 
 
-vae.fit(x_train[:100],  epochs=epochs, batch_size=32)
+vae.fit(x_train,  epochs=epochs, batch_size=32)
 
 # Testing with one image
 original_image = x_test[0:1]  # Take the first image from the test set
