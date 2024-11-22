@@ -8,18 +8,30 @@ import keras.utils
 import tensorflow as tf
 import numpy as np
 import time
-from keras.datasets import cifar10
 import matplotlib.pyplot as plt
 import tool_box
 import os
+from keras.datasets import cifar10
+
 
 tf.random.set_seed(42)
 np.random.seed(42)
 tf.config.run_functions_eagerly(True)
 
 class DynamicVAE(keras.Model):
+    '''
+        Custom VAE model that adjusts the following weights during training (based on schedule):
+            - Alpha (vgg weight)
+            - Gamma (ssim weight)
+            - Beta (kl divergence weight)
 
-    def __init__(self, model_name, latent_dims, optimizer_fn, learning_rate):
+    '''
+
+
+ 
+#=============== Public Instance Methods ===================
+
+    def __init__(self, model_name, latent_dims, optimizer_fn, learning_rate, alpha=0.1, kl_beta=1.0, gamma=1.0):
         super(DynamicVAE, self).__init__()
         self.model_name = model_name
         self.latent_dims = latent_dims
@@ -27,7 +39,13 @@ class DynamicVAE(keras.Model):
         #NOTE: PASS UNINVOKED OPTIMIZER (e.g. pass: keras.optimizers.Nadam NOT: keras.optimizers.Nadam() - optimizer invoked in build)
         self.optimizer_fn = optimizer_fn
         self.learning_rate = learning_rate
+        
+        #set weights
+        self.alpha = alpha #for reconstruction loss
+        self.kl_beta = kl_beta #for vgg_loss
+        self.gamma = gamma  #for ssim_loss
 
+        #compile
         self.compile(optimizer=self.optimizer_fn(self.learning_rate))
 
 
@@ -44,8 +62,11 @@ class DynamicVAE(keras.Model):
     def build_encoder(self, input_shape, latent_dim):
         inputs = keras.Input(shape=input_shape)
         x = keras.layers.Conv2D(32, kernel_size=(3,3), activation="relu", strides=2, padding="same")(inputs)
+        x = keras.layers.BatchNormalization()(x)
         x = keras.layers.Conv2D(64, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
+        x = keras.layers.BatchNormalization()(x)
         x = keras.layers.Conv2D(128, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
+        x = keras.layers.BatchNormalization()(x)
         #start bottleneck
         x = keras.layers.Flatten()(x)
         x = keras.layers.Dense(128, activation="relu")(x)
@@ -64,6 +85,128 @@ class DynamicVAE(keras.Model):
         x = keras.layers.Conv2DTranspose(32, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
         outputs = keras.layers.Conv2DTranspose(original_shape[2], kernel_size=(3,3), activation="sigmoid", padding="same")(x)
         return keras.Model(latent_inputs, outputs, name="decoder")
+
+  
+    def combined_loss(self, original, reconstructed, z_mean, z_log_var):
+        reconstruction_loss = self._compute_reconstruction_error(original, reconstructed)
+        perceptual_loss = self._vgg_loss(original, reconstructed)
+        ssim_loss = self._ssim_loss(original, reconstructed)
+        kl_loss = self._compute_kl_divergence(z_mean, z_log_var)
+
+        #set weights for reconstruction, vgg, and ssim losses
+        total_loss = (self.alpha * reconstruction_loss) + (self.kl_beta * perceptual_loss) + (self.gamma * ssim_loss) + kl_loss
+        return kl_loss, reconstruction_loss, perceptual_loss, ssim_loss, total_loss
+    
+    def call(self, inputs):
+    
+        z_mean, z_log_var = self.encoder(inputs)
+        z = self._sampling(z_mean, z_log_var)
+        reconstructed = self.decoder(z)
+        
+        return reconstructed, z_mean, z_log_var
+    
+    
+
+    
+
+
+    def train_step(self, original_images):
+   
+        with tf.GradientTape() as tape:
+            #forward pass:
+            reconstructed, z_mean, z_log_var = self(original_images)
+
+            #calculate kl_div and recon error
+            kl_divergence, reconstruction_loss, perceptual_loss, ssim_loss, total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
+
+        gradients = tape.gradient(total_loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+ 
+ 
+
+        return {"loss": total_loss,
+                "reconstruction_error": reconstruction_loss, 
+                "kl_divergence": kl_divergence,
+                "vgg_loss": perceptual_loss, 
+                "ssim_loss": ssim_loss,
+                "alpha": self.alpha,
+                "kl_beta": self.kl_beta,
+                "gamma": self.gamma
+                }
+    
+    
+    def scheduler_callback(self, epoch, logs, alpha_decay_rate, kl_beta_decay_rate, gamma_decay_rate):
+        # Update the values of alpha, kl_beta, gamma
+        self.alpha *= (1. + alpha_decay_rate)
+        self.kl_beta *= (1. - kl_beta_decay_rate)
+        self.gamma *= (1. - gamma_decay_rate)
+
+    
+    def reconstruct_image(self, original_image):
+        # Reconstruct the image using the VAE
+        reconstructed_image = self.predict(original_image)
+
+        # The model returns a tuple (outputs, loss) from the VAE. We need to get the output (reconstructed image).
+        reconstructed_image = reconstructed_image[0]  # This extracts the first element of the tuple, which is the reconstructed image.
+
+        # Display the original and reconstructed image side by side
+        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+
+        # Original Image
+        axes[0].imshow(original_image.squeeze())
+        axes[0].set_title("Original Image")
+        axes[0].axis("off")
+
+        # Reconstructed Image
+        axes[1].imshow(reconstructed_image.squeeze())
+        axes[1].set_title("Reconstructed Image")
+        axes[1].axis("off")
+
+        plt.show()
+
+    def save(self, overwrite=False):
+        file_path = f"{os.getcwd()}/trained_models/{self.model_name}.pkl"
+        if os.path.exists(file_path) == True and overwrite == False:
+            response = input(tool_box.color_string('red', f'\n\nMODEL CONFIGS FOUND @ PATH: {file_path}; OVERWRITE EXISTING MODEL? ("y" or "n")\n\n'))
+            if response.lower() == 'n':
+                return None
+            elif response.lower() == 'y':
+                print(tool_box.color_string('green', f"\nOVERWRITING EXISTING FILE....\n"))
+                return self.save(overwrite=True)
+            else:
+                print(tool_box.color_string('yellow', f"\nINVALID RESPONSE; USE 'n' or 'y'\n"))
+                return self.save(overwrite=False)
+        else:
+            configs = self.get_config()
+            tool_box.Create_Pkl(file_path, configs)
+            print(tool_box.color_string('green', f'\n\nSAVED MODEL CONFIGS @ PATH: {file_path}\n\n'))
+            return configs
+        
+
+    def get_config(self):
+   
+        custom_configs = {
+            "model_name": self.model_name,
+            "latent_dims": self.latent_dims,
+            "encoder": self.encoder,
+            "decoder": self.decoder,
+            "vgg_model": self.vgg_model,
+            "build_input_shape": self.build_input_shape,
+            "optimizer_fn": self.optimizer_fn,
+            "learning_rate": self.learning_rate,
+            "weights": self.weights,
+            "alpha": self.alpha,
+            "kl_beta": self.kl_beta,
+            "gamma": self.gamma
+        }
+        
+        return custom_configs
+
+
+
+#===========    PRIVATE INSTANCE METHODS =============================
+
+
 
     def _build_vgg_model(self):
         vgg = keras.applications.VGG16(weights="imagenet", include_top=False)
@@ -103,96 +246,38 @@ class DynamicVAE(keras.Model):
 
     def _compute_reconstruction_error(self, input_images, reconstructed, delta=1.0):
         huber_loss = tf.keras.losses.Huber(delta=delta)
-        return huber_loss(input_images, reconstructed)
-    
+        return huber_loss(input_images, reconstructed) 
 
-    def combined_loss(self, original, reconstructed, z_mean, z_log_var):
-        reconstruction_loss = self._compute_reconstruction_error(original, reconstructed)
-        perceptual_loss = self._vgg_loss(original, reconstructed)
-        ssim_loss = self._ssim_loss(original, reconstructed)
-        kl_loss = self._compute_kl_divergence(z_mean, z_log_var)
-
-        #set weights for reconstruction, vgg, and ssim losses
-
-        alpha = 1.0 #for reconstruction loss
-        beta = 0.1 #for vgg_loss
-        gamma = 0.1 #for ssim_loss
-
-        total_loss = (alpha * reconstruction_loss) + (beta * perceptual_loss) + (gamma * ssim_loss) + kl_loss
-        return kl_loss, reconstruction_loss, perceptual_loss, ssim_loss, total_loss
-    
-    def call(self, inputs):
-    
-        z_mean, z_log_var = self.encoder(inputs)
-        z = self._sampling(z_mean, z_log_var)
-        reconstructed = self.decoder(z)
+#===================================    class methods ==========================
+    @classmethod
+    def from_config(cls, config):
+        #extract modeling init params
+        model_name = config["model_name"]
+        latent_dims = config["latent_dims"]
+        input_shape = config["build_input_shape"]
+        model_optimizer = config["optimizer_fn"]
+        learning_rate = config["learning_rate"]
+        alpha = config["alpha"]
+        kl_beta = config["kl_beta"]
+        gamma = config["gamma"]
+        #rebuild model
+        model = DynamicVAE(model_name=model_name, 
+                           latent_dims=latent_dims, 
+                           optimizer_fn=model_optimizer, 
+                           learning_rate=learning_rate,
+                           alpha=alpha,
+                           gamma = gamma,
+                           kl_beta=kl_beta
+                           )
+        model.build(input_shape)
         
-        return reconstructed, z_mean, z_log_var
-    
- 
-    def train_step(self, original_images):
-   
-        with tf.GradientTape() as tape:
-            #forward pass:
-            reconstructed, z_mean, z_log_var = self(original_images)
+        #load model weights and set
+        weights = config["weights"]
+        model.set_weights(weights)
 
-            #calculate kl_div and recon error
+        return model
 
-            kl_divergence, reconstruction_loss, perceptual_loss, ssim_loss, total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
 
-            #adjust kl_beta
-           # self.kl_beta = self.adjust_kl_beta(reconstruction_error, kl_divergence)
-           # total_loss = reconstruction_error + (kl_divergence * self.kl_beta)
-
-        gradients = tape.gradient(total_loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-
-     
-
-        return {"loss": total_loss, "vgg_loss": perceptual_loss , "ssim_loss": ssim_loss, "reconstruction_error": reconstruction_loss, "kl_divergence": kl_divergence}
-    
-
-    
-    def reconstruct_image(self, original_image):
-        # Reconstruct the image using the VAE
-        reconstructed_image = vae.predict(original_image)
-
-        # The model returns a tuple (outputs, loss) from the VAE. We need to get the output (reconstructed image).
-        reconstructed_image = reconstructed_image[0]  # This extracts the first element of the tuple, which is the reconstructed image.
-
-        # Display the original and reconstructed image side by side
-        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-
-        # Original Image
-        axes[0].imshow(original_image.squeeze())
-        axes[0].set_title("Original Image")
-        axes[0].axis("off")
-
-        # Reconstructed Image
-        axes[1].imshow(reconstructed_image.squeeze())
-        axes[1].set_title("Reconstructed Image")
-        axes[1].axis("off")
-
-        plt.show()
-
-    def save(self, overwrite=False):
-        file_path = f"{os.getcwd()}/trained_models/{self.model_name}.pkl"
-        if os.path.exists(file_path) == True and overwrite == False:
-            response = input(tool_box.color_string('red', f'\n\nMODEL CONFIGS FOUND @ PATH: {file_path}; OVERWRITE EXISTING MODEL? ("y" or "n")\n\n'))
-            if response.lower() == 'n':
-                return None
-            elif response.lower() == 'y':
-                print(tool_box.color_string('green', f"\nOVERWRITING EXISTING FILE....\n"))
-                return self.save(overwrite=True)
-            else:
-                print(tool_box.color_string('yellow', f"\nINVALID RESPONSE; USE 'n' or 'y'\n"))
-                return self.save(overwrite=False)
-        else:
-            configs = self.get_config()
-            tool_box.Create_Pkl(file_path, configs)
-            print(tool_box.color_string('green', f'\n\nSAVED MODEL CONFIGS @ PATH: {file_path}\n\n'))
-            return configs
-        
     @classmethod
     def load_model(cls, model_name):
         file_path = f"{os.getcwd()}/trained_models/{model_name}.pkl"
@@ -205,41 +290,7 @@ class DynamicVAE(keras.Model):
             print(tool_box.color_string('green', f'\n\nRETURNING MODEL BUILT WITH CONFIGS FOUND @ PATH: {file_path}\n\n'))
             return model
 
-    def get_config(self):
-   
-        custom_configs = {
-            "model_name": self.model_name,
-            "latent_dims": self.latent_dims,
-            "encoder": self.encoder,
-            "decoder": self.decoder,
-            "vgg_model": self.vgg_model,
-            "build_input_shape": self.build_input_shape,
-            "optimizer_fn": self.optimizer_fn,
-            "learning_rate": self.learning_rate,
-            "weights": self.weights
-        }
-        
-        return custom_configs
-    
-    @classmethod
-    def from_config(cls, config):
-        #extract modeling init params
-        model_name = config["model_name"]
-        latent_dims = config["latent_dims"]
-        input_shape = config["build_input_shape"]
-        model_optimizer = config["optimizer_fn"]
-        learning_rate = config["learning_rate"]
 
-        #rebuild model
-        model = DynamicVAE(model_name=model_name, latent_dims=latent_dims, optimizer_fn=model_optimizer, learning_rate=learning_rate)
-        model.build(input_shape)
-        
-        #load model weights and set
-        weights = config["weights"]
-        model.set_weights(weights)
-
-        return model
-    
     @classmethod
     # Function to compare weights
     def compare_model_weights(cls,weights_1, weights_2):
@@ -254,3 +305,5 @@ class DynamicVAE(keras.Model):
 
         print("The weights of both models are identical.")
         return True
+
+
