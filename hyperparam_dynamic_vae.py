@@ -367,3 +367,93 @@ class DynamicVAE(keras.Model):
 
 
 
+
+def build_vae(hp,model_name="dummy_name"):
+    
+
+
+    optimizer_fn = hp.Choice("optimizer", ["adam", "nadam"])
+
+    #build params
+   
+        #training params:
+    initial_recon_weight = 1.0 #recon loss
+    initial_kl_beta = hp.Choice('initial_kl_loss', [0.1, 0.01, .001])   #kl_loss
+    initial_ssim_weight = 1.0  #ssim loss
+    initial_vgg_weight = hp.Choice('initial_vgg_loss', [0.1, 0.01, .001])
+        
+    latent_dims = hp.Choice("latent_dims", [2,16,32,64])
+
+
+    recon_decay_rate = hp.Choice('recon_decay_rate', values=[1.0, 0.8, 0.9, 0.95])
+    vgg_decay_rate = hp.Choice('vgg_decay_rate', values=[0.9, 0.95, 0.98])
+    kl_beta_decay_rate = hp.Choice('kl_beta_decay_rate', values=[0.01, 0.001, 0.1])
+    ssim_decay_rate = hp.Choice('ssim_decay_rate', values=[0.9, 0.95, 0.98])
+
+    if optimizer_fn == "adam":
+        #handle adam optimizer
+        optimizer_fn = keras.optimizers.Adam
+        initial_learning_rate = hp.Choice('initial_learning_rate', values=[1e-3, 1e-4, 1e-2])
+        decay_steps = hp.Choice('decay_steps', values=[5000, 10000, 20000])
+        decay_rate = hp.Choice('decay_rate', values=[0.96, 0.98, 0.99])
+
+        #set learning rate to scheduled decay (not available for Nadam)
+        learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=initial_learning_rate, 
+            decay_steps=decay_steps, 
+            decay_rate=decay_rate, 
+            staircase=True
+        )
+
+    else:
+        optimizer_fn = keras.optimizers.Nadam
+        learning_rate = hp.Choice("initial_learning_rate", values=[0.0001, 0.00001, 0.001])
+
+
+    model = DynamicVAE(model_name=model_name,
+                    latent_dims=latent_dims, 
+                    optimizer_fn=optimizer_fn, 
+                    learning_rate=learning_rate,
+                    recon_weight=initial_recon_weight,
+                    kl_beta=initial_kl_beta,
+                    vgg_weight=initial_vgg_weight,
+                    ssim_weight=initial_ssim_weight,
+                    recon_decay_rate = recon_decay_rate,
+                    vgg_decay_rate = vgg_decay_rate,
+                    kl_beta_decay_rate = kl_beta_decay_rate,
+                    ssim_decay_rate = ssim_decay_rate,
+                    )
+    
+
+
+    return model
+
+
+
+
+
+
+
+#load data
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+x_train = x_train.astype("float32")/255.0
+x_test = x_test.astype("float32")/255.0
+
+
+tuner = kt.BayesianOptimization(
+    build_vae,
+    objective='val_loss',  # Objective to optimize
+    max_trials=10,
+    directory='hp_results',
+    project_name='vae_hyperparameter_tuning'
+)
+
+
+epochs=100
+batch_size=64
+
+
+tuner.search(x_train,
+             epochs=epochs,
+             batch_size=batch_size,
+             validation_data=(x_test, x_test))
