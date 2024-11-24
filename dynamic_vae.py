@@ -1,6 +1,8 @@
 import keras
 import keras.applications
 import keras.applications.vgg16
+import keras.callbacks
+import keras.datasets
 import keras.layers
 import keras.losses
 import keras.optimizers
@@ -14,9 +16,7 @@ import os
 from keras.datasets import cifar10
 
 
-tf.random.set_seed(42)
-np.random.seed(42)
-tf.config.run_functions_eagerly(True)
+#tf.config.run_functions_eagerly(True)
 
 class DynamicVAE(keras.Model):
     '''
@@ -62,6 +62,8 @@ class DynamicVAE(keras.Model):
         self.ssim_decay_rate = ssim_decay_rate
         self.current_epoch = 0
 
+
+        self.kl_divergence = None
         #compile
         self.compile(optimizer=self.optimizer_fn(self.learning_rate))
 
@@ -79,11 +81,11 @@ class DynamicVAE(keras.Model):
     def build_encoder(self, input_shape, latent_dim):
         inputs = keras.Input(shape=input_shape)
         x = keras.layers.Conv2D(32, kernel_size=(3,3), activation="relu", strides=2, padding="same")(inputs)
-        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.Dropout(0.2)(x)
         x = keras.layers.Conv2D(64, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
-        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.Dropout(0.2)(x)
         x = keras.layers.Conv2D(128, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
-        x = keras.layers.BatchNormalization()(x)
+       # x = keras.layers.BatchNormalization()(x)
         #start bottleneck
         x = keras.layers.Flatten()(x)
         x = keras.layers.Dense(128, activation="relu")(x)
@@ -95,24 +97,27 @@ class DynamicVAE(keras.Model):
         reshape_layer_shape = (original_shape[0]//4, original_shape[1]//4,64)
         latent_inputs = keras.Input(shape=(latent_dim,))
         x = keras.layers.Dense(128, activation="relu")(latent_inputs)
+        
         x = keras.layers.Dense(np.prod(reshape_layer_shape), activation="relu")(x)
         x = keras.layers.Reshape(reshape_layer_shape)(x)
         #begin upsampling
         x = keras.layers.Conv2DTranspose(64, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
+
         x = keras.layers.Conv2DTranspose(32, kernel_size=(3,3), activation="relu", strides=2, padding="same")(x)
-        outputs = keras.layers.Conv2DTranspose(original_shape[2], kernel_size=(3,3), activation="sigmoid", padding="same")(x)
+       
+        outputs = keras.layers.Conv2DTranspose(original_shape[2], kernel_size=(3,3),  activation="linear", padding="same")(x)
         return keras.Model(latent_inputs, outputs, name="decoder")
 
   
     def combined_loss(self, original, reconstructed, z_mean, z_log_var):
-        reconstruction_loss = self._compute_reconstruction_error(original, reconstructed)
+        self.reconstruction_loss = self._compute_reconstruction_error(original, reconstructed)
         vgg_loss = self._vgg_loss(original, reconstructed)
         ssim_loss = self._ssim_loss(original, reconstructed)
-        kl_divergence = self._compute_kl_divergence(z_mean, z_log_var)
+        self.kl_divergence = self._compute_kl_divergence(z_mean, z_log_var)
 
         #set weights for reconstruction, vgg, and ssim losses
-        total_loss = (self.recon_weight * reconstruction_loss) + (self.vgg_weight * vgg_loss) + (self.ssim_weight * ssim_loss) + (kl_divergence * self.kl_beta)
-        return kl_divergence, reconstruction_loss,  vgg_loss, ssim_loss, total_loss
+        total_loss = (self.recon_weight * self.reconstruction_loss) + (self.vgg_weight * vgg_loss) + (self.ssim_weight * ssim_loss) + (self.kl_divergence * self.kl_beta)
+        return self.kl_divergence, self.reconstruction_loss,  vgg_loss, ssim_loss, total_loss
     
     def call(self, inputs):
         z_mean, z_log_var = self.encoder(inputs)
@@ -123,45 +128,65 @@ class DynamicVAE(keras.Model):
     
     
 
-    
-
 
     def train_step(self, original_images):
-        
+   
+  
         with tf.GradientTape() as tape:
             #forward pass:
             reconstructed, z_mean, z_log_var = self(original_images)
 
             #calculate kl_div and recon error
-            kl_divergence, reconstruction_loss, perceptual_loss, ssim_loss, total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
+            self.vgg_weight, self.ssim_weight, self.kl_beta = self.update_weights()
 
-        gradients = tape.gradient(total_loss, self.trainable_variables)
+            self.kl_divergence, self.reconstruction_loss, self.vgg_loss, self.ssim_loss, self.total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
+           
+            #update loss with updated weights
+            self.vgg_loss = self.vgg_loss * self.vgg_weight
+            self.ssim_loss = self.ssim_loss * self.ssim_weight
+        
+            #print(f'\n\nSETTING KL BETA: {self.kl_beta}\n\n')
+            total_loss = (self.kl_divergence * self.kl_beta) + self.reconstruction_loss + self.vgg_loss + self.ssim_loss
+
+        gradients = tape.gradient(self.total_loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
  
         self.current_epoch += 1
 
+        #handle val
+        
+
+    
+        
         return {"loss": total_loss,
-                "reconstruction_error": reconstruction_loss, 
-                "kl_divergence": kl_divergence,
-                "vgg_loss": perceptual_loss, 
-                "ssim_loss": ssim_loss,
+                "reconstruction_error": self.reconstruction_loss, 
+                "kl_divergence": self.kl_divergence,
+                "vgg_loss": self.vgg_loss, 
+                "ssim_loss": self.ssim_loss,
                 "recon_weight": self.recon_weight,
                 "kl_beta": self.kl_beta,
                 "vgg_weight": self.vgg_weight,
                 "ssim_weight": self.ssim_weight
                 }
     
-    
-    def scheduler_callback(self, epoch, logs):
-        # Update the values of recon_weight, kl_beta, vgg_weight
-    
-        self.recon_weight *= self.recon_decay_rate
-        self.kl_beta *= self.kl_beta_decay_rate
-        self.vgg_weight *= self.vgg_decay_rate
-        self.ssim_weight *= self.ssim_decay_rate
-    
-    
+
             #keep weights the same
+    def update_weights(self):
+     
+            # Linear schedule for alpha (VGG loss) and gamma (SSIM loss)
+        max_epoch = 100
+
+        alpha_start, alpha_end = 0.1, 1.0
+        kl_beta_start, kl_beta_end = 0.01, 1.0
+        gamma_start, gamma_end = 1.0, 0.5
+        
+   
+        vgg_weight = alpha_start + (alpha_end - alpha_start) * (int(self.current_epoch) / max_epoch)
+        ssim_weight = gamma_start + (gamma_end - gamma_start) * (int(self.current_epoch) / max_epoch)
+        
+        kl_beta = kl_beta_start + (kl_beta_end - kl_beta_start) * (int(self.current_epoch) / max_epoch)
+
+        return vgg_weight, ssim_weight, kl_beta
 
     
     def reconstruct_image(self, original_image):
@@ -254,19 +279,22 @@ class DynamicVAE(keras.Model):
     def _build_vgg_model(self):
         vgg = keras.applications.VGG16(weights="imagenet", include_top=False)
       #  'block1_conv2', 'block2_conv2' ,'block5_conv2', 'block5_conv3'
-        layer_names =    ['block3_conv2', 'block3_conv3', 'block4_conv2','block4_conv3']
+        layer_names =    ['block1_conv2', 'block2_conv2' ,'block3_conv2','block4_conv2', 'block5_conv2', 'block5_conv3']
         vgg_outputs = [vgg.get_layer(name).output for name in layer_names]
         vgg_model = keras.Model(inputs=vgg.input, outputs=vgg_outputs)
-        vgg_model.trainable = True
+        vgg_model.trainable = False
         return vgg_model
  
     def _vgg_loss(self, original, reconstructed):
-        original_preprocessed = keras.applications.vgg16.preprocess_input(original * 255.0)
-        reconstructed_preprocessed = keras.applications.vgg16.preprocess_input(reconstructed * 255.0)
-        original_features = self.vgg_model(original_preprocessed)
-        reconstructed_features = self.vgg_model(reconstructed_preprocessed)
+
+        # original_preprocessed = keras.applications.VGG19.preprocess_input(original * 255.0)
+        # reconstructed_preprocessed = keras.applications.VGG19.preprocess_input(reconstructed * 255.0)
+
+        original_vgg_loss = self.vgg_model(original)
+        reconstructed_vgg_loss = self.vgg_model(reconstructed)
         loss = 0
-        for original_feat, recon_feat in zip(original_features, reconstructed_features):
+        #tf.reduce_mean(tf.square(original_vgg_loss -  reconstructed_vgg_loss))
+        for original_feat, recon_feat in zip(original_vgg_loss, reconstructed_vgg_loss):
             loss += tf.reduce_mean(tf.square(original_feat -  recon_feat))
         
         return loss
@@ -287,10 +315,24 @@ class DynamicVAE(keras.Model):
         return tf.reduce_mean(kl_div)
     
 
-    def _compute_reconstruction_error(self, input_images, reconstructed, delta=1.0):
-        huber_loss = tf.keras.losses.Huber(delta=delta)
-        return huber_loss(input_images, reconstructed) 
+    def _compute_reconstruction_error(self, input_images, reconstructed):
+        # Use Mean Squared Error (MSE) instead of Huber loss
+        mse_loss = tf.keras.losses.MeanSquaredError(reduction="sum")
+        print(mse_loss(input_images, reconstructed))
+        return mse_loss(input_images, reconstructed)
+        # huber = keras.losses.Huber(delta=1.0)
+        # loss = huber(input_images, reconstructed)
+       # return loss
 
+    def get_alpha_gamma(epoch, max_epoch=100):
+        # Linear schedule for alpha (VGG loss) and gamma (SSIM loss)
+        alpha_start, alpha_end = 0.1, 1.0
+        gamma_start, gamma_end = 0.05, 0.5
+        
+        alpha = alpha_start + (alpha_end - alpha_start) * (epoch / max_epoch)
+        gamma = gamma_start + (gamma_end - gamma_start) * (epoch / max_epoch)
+        
+        return alpha, gamma
 #===================================    class methods ==========================
     @classmethod
     def from_config(cls, config):
@@ -363,6 +405,7 @@ class DynamicVAE(keras.Model):
 
 
 #load data
+
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 x_train = x_train.astype("float32")/255.0
 x_test = x_test.astype("float32")/255.0
@@ -372,36 +415,48 @@ x_test = x_test.astype("float32")/255.0
 
 
 learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=0.0001, 
+            initial_learning_rate=0.001, 
             decay_steps=5000, 
-            decay_rate=0.99, 
+            decay_rate=0.8,
             staircase=True
+        
         )
+
 
 
 optimizer = keras.optimizers.Adam
 model_name = "schedule_vae"
-latent_dims = 32
+latent_dims = 512
 vae = DynamicVAE(model_name=model_name,
                  optimizer_fn=optimizer,
                  learning_rate=learning_rate,
-                 latent_dims=latent_dims
+                 latent_dims=latent_dims,
+                 kl_beta=0.01
 )
 
 
-callbacks = [
-    keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: vae.scheduler_callback(epoch, logs))
-]
 
 
 
-epochs=100
-batch_size=64
+
+epochs=200
 
 
-vae.fit(x_train,
+#adjust learning rate  and increase batch size 
+batch_size=1
+
+
+
+vae.fit(x_train[:100],
         epochs=epochs,
         batch_size=batch_size,
-        validation_data=(x_test, x_test),
-        callbacks=callbacks
+        #callbacks=[keras.callbacks.LambdaCallback(lambda epoch, logs: vae.update_weights(epoch, logs))]
 )
+
+for i in range(10):
+
+    test_image = x_test[i:i+1]
+    vae.reconstruct_image(test_image)
+
+
+#use decay obect for weights tf.keras.optimizers.schedules.ExponentialDecay and tf.keras.optimizers.schedules.PieceWiseConstantDecay (linear decay)
