@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import tool_box
 import os
 from keras.datasets import cifar10
-
+from pprint import pprint
 
 #tf.config.run_functions_eagerly(True)
 
@@ -129,9 +129,16 @@ class DynamicVAE(keras.Model):
     
 
 
-    def train_step(self, original_images):
+    def train_step(self, original_images, **kwargs):
+
+       
+        self.current_min_loss = "n/a"
+        self.min_delta = 0.001
+        self.patience = 3
+        self.early_stop_count = 0
    
-  
+
+    
         with tf.GradientTape() as tape:
             #forward pass:
             reconstructed, z_mean, z_log_var = self(original_images)
@@ -140,7 +147,7 @@ class DynamicVAE(keras.Model):
             self.vgg_weight, self.ssim_weight, self.kl_beta = self.update_weights()
 
             self.kl_divergence, self.reconstruction_loss, self.vgg_loss, self.ssim_loss, self.total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
-           
+        
             #update loss with updated weights
             self.vgg_loss = self.vgg_loss * self.vgg_weight
             self.ssim_loss = self.ssim_loss * self.ssim_weight
@@ -150,7 +157,7 @@ class DynamicVAE(keras.Model):
 
         gradients = tape.gradient(self.total_loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
- 
+
         self.current_epoch += 1
 
         #handle val
@@ -166,9 +173,10 @@ class DynamicVAE(keras.Model):
                 "recon_weight": self.recon_weight,
                 "kl_beta": self.kl_beta,
                 "vgg_weight": self.vgg_weight,
-                "ssim_weight": self.ssim_weight
+                "ssim_weight": self.ssim_weight,
+           
                 }
-    
+        
 
             #keep weights the same
     def update_weights(self):
@@ -211,9 +219,16 @@ class DynamicVAE(keras.Model):
 
         plt.show()
 
-    def save(self, overwrite=False):
-        file_path = f"{os.getcwd()}/trained_models/{self.model_name}.pkl"
-        if os.path.exists(file_path) == True and overwrite == False:
+    def save(self, save_path=None, overwrite=False):
+        if save_path == None:
+
+            file_path = f"{os.getcwd()}/trained_models/{self.model_name}.pkl"
+            checkpoint = False
+        else:
+            file_path = save_path
+
+            checkpoint = True
+        if os.path.exists(file_path) == True and overwrite == False and checkpoint == False:
             response = input(tool_box.color_string('red', f'\n\nMODEL CONFIGS FOUND @ PATH: {file_path}; OVERWRITE EXISTING MODEL? ("y" or "n")\n\n'))
             if response.lower() == 'n':
                 return None
@@ -324,15 +339,7 @@ class DynamicVAE(keras.Model):
         # loss = huber(input_images, reconstructed)
        # return loss
 
-    def get_alpha_gamma(epoch, max_epoch=100):
-        # Linear schedule for alpha (VGG loss) and gamma (SSIM loss)
-        alpha_start, alpha_end = 0.1, 1.0
-        gamma_start, gamma_end = 0.05, 0.5
-        
-        alpha = alpha_start + (alpha_end - alpha_start) * (epoch / max_epoch)
-        gamma = gamma_start + (gamma_end - gamma_start) * (epoch / max_epoch)
-        
-        return alpha, gamma
+
 #===================================    class methods ==========================
     @classmethod
     def from_config(cls, config):
@@ -404,7 +411,63 @@ class DynamicVAE(keras.Model):
 
 
 
-#load data
+    def _train_checkpoint(self, epoch, logs):
+        checkpoint_path = f"{os.getcwd()}/model_checkpoints/{model_name}_checkpoint_{epochs}"
+        self.save(save_path=checkpoint_path)
+        print(tool_box.color_string('cyan', f'\n\nSAVING BEST LOSS: {checkpoint_path}\n'))
+
+
+    def _early_stop(self, epoch, logs):
+        #initiate
+        if self.current_min_loss == "n/a":
+            self.current_min_loss = logs["loss"]
+            self.current_loss = logs["loss"]
+        
+        #check if min delta passed
+        if logs["loss"] - self.current_loss < 0:
+    
+
+            #handle success; reset early stop count if needed
+            if self.early_stop_count > 0:
+                self.early_stop_count = 0
+            
+            #check if beats current min
+            if logs["loss"] < self.current_min_loss:
+                self.current_min_loss = logs["loss"]
+                #call checkpoint
+                self._train_checkpoint(epoch, logs)
+        
+        #handle min delta faile
+        else:
+
+            if self.early_stop_count + 1 >= self.patience:
+            
+                print(tool_box.color_string('red', f"\n\nMAX PATIENCE EXCEEDED TERMINATING\n\n"))
+                self.stop_training = True
+                return None
+            else:
+
+                self.early_stop_count += 1
+                print(tool_box.color_string('red', f"\n\nMIN DELTA FAIL INCREMENTING COUNT: {self.early_stop_count}\n\n"))
+            
+        self.current_loss = logs["loss"]
+        epoch_loss = logs["loss"] - self.current_loss
+      
+       # logs.update({"stop_count": self.early_stop_count, "min_loss": self.current_min_loss, "patience": self.patience, "epoch_diff": {*epoch_loss}, "min_delta": {*self.min_delta}})
+        print(tool_box.color_string('yellow', f"\nEPOCH {epoch} LOGS (after applied weights for losses):\n"))
+        for k, v in logs.items():
+            print(tool_box.color_string("green", f"\t{k}:\t{v}"))
+        print("\n\n")
+
+        #set current loss
+     
+        return None
+
+
+# tool_box.get_wiki_images("elephant")
+
+
+
 
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 x_train = x_train.astype("float32")/255.0
@@ -414,49 +477,63 @@ x_test = x_test.astype("float32")/255.0
 
 
 
-learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=0.001, 
-            decay_steps=5000, 
-            decay_rate=0.8,
-            staircase=True
+# learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
+#             initial_learning_rate=0.001, 
+#             decay_steps=5000, 
+#             decay_rate=0.8,
+#             staircase=True
         
-        )
+#         )
 
 
 
-optimizer = keras.optimizers.Adam
-model_name = "schedule_vae"
-latent_dims = 512
-vae = DynamicVAE(model_name=model_name,
-                 optimizer_fn=optimizer,
-                 learning_rate=learning_rate,
-                 latent_dims=latent_dims,
-                 kl_beta=0.01
-)
+# optimizer = keras.optimizers.Adam
+
+latent_dims = 256
+batch_size = 32
+epochs = 500
+model_name = f"{latent_dims}_dim_{latent_dims}_bs_{batch_size}_vae"
+# vae = DynamicVAE(model_name=model_name,
+#                  optimizer_fn=optimizer,
+#                  learning_rate=learning_rate,
+#                  latent_dims=latent_dims,
+#                  kl_beta=0.01
+# )
 
 
 
 
 
+# # epochs=2
+# model_path = f"./trained_models/{model_name}.pkl"
 
-epochs=200
-
-
-#adjust learning rate  and increase batch size 
-batch_size=1
+# #adjust learning rate  and increase batch size 
 
 
 
-vae.fit(x_train[:100],
-        epochs=epochs,
-        batch_size=batch_size,
-        #callbacks=[keras.callbacks.LambdaCallback(lambda epoch, logs: vae.update_weights(epoch, logs))]
-)
 
+# vae.fit(x_train,
+#         epochs=epochs,
+#         batch_size=batch_size,
+#         callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: vae._early_stop(epoch, logs))]
+# )
+# vae.save(model_path)
+
+
+
+vae = DynamicVAE.load_model(model_name)
+
+# check weights to see if training reflected
 for i in range(10):
 
     test_image = x_test[i:i+1]
     vae.reconstruct_image(test_image)
 
 
-#use decay obect for weights tf.keras.optimizers.schedules.ExponentialDecay and tf.keras.optimizers.schedules.PieceWiseConstantDecay (linear decay)
+
+
+'''
+    _early_stop_working with "loss" - switch to "val_loss" after updating train_step with .evaluate
+
+ - decoder as for vector classification
+'''
