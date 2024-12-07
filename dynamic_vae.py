@@ -131,7 +131,7 @@ class DynamicVAE(keras.Model):
 
     def train_step(self, original_images, **kwargs):
 
-       
+        self.max_loss = None
         self.current_min_loss = "n/a"
         self.min_delta = 0.001
         self.patience = 3
@@ -157,7 +157,7 @@ class DynamicVAE(keras.Model):
 
         gradients = tape.gradient(self.total_loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-
+        
         self.current_epoch += 1
 
         #handle val
@@ -179,6 +179,12 @@ class DynamicVAE(keras.Model):
         
 
             #keep weights the same
+
+
+
+
+
+
     def update_weights(self):
      
             # Linear schedule for alpha (VGG loss) and gamma (SSIM loss)
@@ -193,6 +199,8 @@ class DynamicVAE(keras.Model):
         ssim_weight = gamma_start + (gamma_end - gamma_start) * (int(self.current_epoch) / max_epoch)
         
         kl_beta = kl_beta_start + (kl_beta_end - kl_beta_start) * (int(self.current_epoch) / max_epoch)
+
+        
 
         return vgg_weight, ssim_weight, kl_beta
 
@@ -294,7 +302,9 @@ class DynamicVAE(keras.Model):
     def _build_vgg_model(self):
         vgg = keras.applications.VGG16(weights="imagenet", include_top=False)
       #  'block1_conv2', 'block2_conv2' ,'block5_conv2', 'block5_conv3'
-        layer_names =    ['block1_conv2', 'block2_conv2' ,'block3_conv2','block4_conv2', 'block5_conv2', 'block5_conv3']
+     # Conv1_1, Conv1_2, and Conv2_1
+        #layer_names =    ['block1_conv2', 'block2_conv2' ,'block3_conv2','block4_conv2', 'block5_conv2', 'block5_conv3']
+        layer_names =    ['block1_conv1', 'block1_conv2', 'block2_conv1', 'block2_conv2' ,'block3_conv2','block4_conv2', 'block5_conv2', 'block5_conv3']
         vgg_outputs = [vgg.get_layer(name).output for name in layer_names]
         vgg_model = keras.Model(inputs=vgg.input, outputs=vgg_outputs)
         vgg_model.trainable = False
@@ -454,14 +464,43 @@ class DynamicVAE(keras.Model):
         epoch_loss = logs["loss"] - self.current_loss
       
        # logs.update({"stop_count": self.early_stop_count, "min_loss": self.current_min_loss, "patience": self.patience, "epoch_diff": {*epoch_loss}, "min_delta": {*self.min_delta}})
+
+        ssim_loss_pct = logs["ssim_loss"] * logs["ssim_weight"]
+        vgg_loss_pct = logs["vgg_loss"] * logs["vgg_weight"]
+        kl_loss_pct = logs["kl_divergence"] * logs["kl_beta"]
+        recon_pct = logs["reconstruction_error"] * logs["recon_weight"]
+
+        #find total_loss without recon error
+        total_loss = (ssim_loss_pct + vgg_loss_pct + kl_loss_pct)
+
+        losses = {
+            "kl": kl_loss_pct/total_loss,
+            "vgg": vgg_loss_pct/total_loss,
+            "ssim": ssim_loss_pct/total_loss,
+          
+        }
+
+        #of losses find one that accounts for largest proportion of loss and adjust its weight to discount value (decrease its weight)
+        max_loss_pct = max([v for v in losses.values()])
+        max_loss = [k for k in losses.keys() if losses[k] == max_loss_pct][0]
+
+
         print(tool_box.color_string('yellow', f"\nEPOCH {epoch} LOGS (after applied weights for losses):\n"))
         for k, v in logs.items():
             print(tool_box.color_string("green", f"\t{k}:\t{v}"))
         print("\n\n")
+        print(losses)
+        print(f"MAX LOSS: {max_loss}")
+        print(sum([v for v in losses.values()]))
+        print("\n\n")
 
+        self.max_loss = max_loss
         #set current loss
      
         return None
+
+
+
 
 
 # tool_box.get_wiki_images("elephant")
@@ -469,30 +508,36 @@ class DynamicVAE(keras.Model):
 
 
 
-(x_train, y_train), (x_test, y_test) = cifar10.load_data()
-x_train = x_train.astype("float32")/255.0
-x_test = x_test.astype("float32")/255.0
+# (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+# x_train = x_train.astype("float32")/255.0
+# x_test = x_test.astype("float32")/255.0
+
+
+(X_train, y_train), (X_test, y_test) = tool_box.load_tf_dataset("tf_flowers")
 
 
 
 
 
-# learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-#             initial_learning_rate=0.001, 
-#             decay_steps=5000, 
-#             decay_rate=0.8,
-#             staircase=True
+
+learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=0.001, 
+            decay_steps=5000, 
+            decay_rate=0.8,
+            staircase=True
         
-#         )
+        )
 
 
 
 # optimizer = keras.optimizers.Adam
 
-latent_dims = 256
-batch_size = 32
-epochs = 500
-model_name = f"{latent_dims}_dim_{latent_dims}_bs_{batch_size}_vae"
+# latent_dims = 256
+# batch_size = 1028
+# epochs = 2
+# #model_name = f"{latent_dims}_dim_{latent_dims}_bs_{batch_size}_vae_VGG_BLOCKS_ADDED"
+# #model_name = f"test"
+
 # vae = DynamicVAE(model_name=model_name,
 #                  optimizer_fn=optimizer,
 #                  learning_rate=learning_rate,
@@ -502,12 +547,7 @@ model_name = f"{latent_dims}_dim_{latent_dims}_bs_{batch_size}_vae"
 
 
 
-
-
-# # epochs=2
 # model_path = f"./trained_models/{model_name}.pkl"
-
-# #adjust learning rate  and increase batch size 
 
 
 
@@ -517,16 +557,18 @@ model_name = f"{latent_dims}_dim_{latent_dims}_bs_{batch_size}_vae"
 #         batch_size=batch_size,
 #         callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: vae._early_stop(epoch, logs))]
 # )
+
+
 # vae.save(model_path)
 
-
+model_name = "256_dim_256_bs_32_vae_VGG_BLOCKS_ADDED"
 
 vae = DynamicVAE.load_model(model_name)
 
-# check weights to see if training reflected
+
 for i in range(10):
 
-    test_image = x_test[i:i+1]
+    test_image = X_test[i:i+1]
     vae.reconstruct_image(test_image)
 
 

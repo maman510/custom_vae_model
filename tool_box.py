@@ -4,6 +4,8 @@ import datetime as dt
 import os 
 # from bs4 import BeautifulSoup
 # import lxml
+import keras.datasets
+import keras.datasets.cifar100
 import requests
 import random
 from inspect import getmembers
@@ -11,6 +13,11 @@ import json
 import time
 import pandas as pd
 from pandas.tseries.holiday import USFederalHolidayCalendar
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import tensorflow_datasets as tfds
+import numpy as np
+import tensorflow as tf
 
 def get_current_timestamp():
     dt_obj = datetime.datetime.now()
@@ -398,3 +405,82 @@ def get_federal_holidays():
     holidays = cal.holidays(start=dr.min(), end=dr.max())
 
     return holidays
+
+
+def plot_image(image):
+    '''
+        accepts image path or ndarray representation of image for plotting
+    '''
+    if type(image) == str:
+        # Load an image if path passed
+        image = mpimg.imread(image)
+
+
+    plt.imshow(image.squeeze())
+    plt.axis('off')  # Turn off axis labels
+    plt.show()
+
+
+
+
+def load_tf_dataset(dataset_name, test_split=0.2, image_reshape_size=(32,32,3)):
+        
+    # Load the Flowers dataset (with 5 categories)
+    dataset, info = tfds.load(dataset_name, with_info=True, as_supervised=True)
+
+    # The dataset is split into train and test
+    all_data = dataset['train']
+
+    #split test using ratio
+    test_start_index = int(len(all_data) * (1.0 - test_split)) # leaves first 100% - split_pct for train and remaining for test (ex: split=0.2 => 100% - 20% = 80% of the elements left out from beginning for train)
+
+    # Convert to NumPy ndarrays
+    train_images = []
+    train_labels = []
+
+    test_images = []
+    test_labels = []
+
+    # # Iterate through the train dataset
+    count = 0
+    current_image_container = []
+    current_label_container = []
+
+    #iterate through all_data until train data satisfied - fill remaining and assign to test
+    print(color_string("yellow", f"\n\n\tLOADING DATASET (shape = {image_reshape_size})....\n\n"))
+    for image, label in all_data:
+
+        if count == test_start_index:
+            #set train to current container and reset current container for test to use
+            train_images = np.array([image for image in current_image_container])
+            train_labels = np.array([image for image in current_label_container])
+            current_image_container = test_images
+            current_label_container = test_labels
+
+        # Reshape the image to 32x32x3
+       # print(count, test_start_index, len(train_images))
+        
+        image_resized = tf.image.resize(image, [image_reshape_size[0], image_reshape_size[1]]).numpy()
+
+        current_image_container.append(image_resized)
+        current_label_container.append(label.numpy())
+        count += 1
+
+    #set current containers for test
+    test_images = np.array(current_image_container)
+    test_labels = np.array(current_label_container)
+
+
+    #normalize image data
+    train_images = train_images.astype("float32") / 255.0
+    test_images = test_images.astype("float32") / 255.0
+
+    print(f"\n\nTRAIN IMAGE COUNT: {len(train_images)}\tTEST IMAGE COUNT: {len(test_images)}\tTOTAL IN SET: {len(all_data)}")
+
+    print(f"Train Images shape: {train_images.shape}")
+    print(f"Train Labels shape: {train_labels.shape}")
+    print(f"Test Images shape: {test_images.shape}")
+    print(f"Test Labels shape: {test_labels.shape}")
+
+    return (train_images, train_labels), (test_images, test_labels)
+
