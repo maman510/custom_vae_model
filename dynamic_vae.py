@@ -16,7 +16,7 @@ import os
 from keras.datasets import cifar10
 from pprint import pprint
 
-#tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 
 class DynamicVAE(keras.Model):
     '''
@@ -62,7 +62,7 @@ class DynamicVAE(keras.Model):
         self.ssim_decay_rate = ssim_decay_rate
         self.current_epoch = 0
 
-
+        #self.test_weight = tf.Variable(1.0, trainable=False)
         self.kl_divergence = None
         #compile
         self.compile(optimizer=self.optimizer_fn(self.learning_rate))
@@ -145,9 +145,11 @@ class DynamicVAE(keras.Model):
 
             #calculate kl_div and recon error
             self.vgg_weight, self.ssim_weight, self.kl_beta = self.update_weights()
-
-            self.kl_divergence, self.reconstruction_loss, self.vgg_loss, self.ssim_loss, self.total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
         
+
+            #time.sleep(2)
+            self.kl_divergence, self.reconstruction_loss, self.vgg_loss, self.ssim_loss, self.total_loss = self.combined_loss(original_images, reconstructed, z_mean, z_log_var)
+
             #update loss with updated weights
             self.vgg_loss = self.vgg_loss * self.vgg_weight
             self.ssim_loss = self.ssim_loss * self.ssim_weight
@@ -186,8 +188,12 @@ class DynamicVAE(keras.Model):
 
 
     def update_weights(self):
-     
-            # Linear schedule for alpha (VGG loss) and gamma (SSIM loss)
+
+
+
+
+
+       # Linear schedule for alpha (VGG loss) and gamma (SSIM loss)
         max_epoch = 100
 
         alpha_start, alpha_end = 0.1, 1.0
@@ -201,7 +207,6 @@ class DynamicVAE(keras.Model):
         kl_beta = kl_beta_start + (kl_beta_end - kl_beta_start) * (int(self.current_epoch) / max_epoch)
 
         
-
         return vgg_weight, ssim_weight, kl_beta
 
     
@@ -343,11 +348,8 @@ class DynamicVAE(keras.Model):
     def _compute_reconstruction_error(self, input_images, reconstructed):
         # Use Mean Squared Error (MSE) instead of Huber loss
         mse_loss = tf.keras.losses.MeanSquaredError(reduction="sum")
-        print(mse_loss(input_images, reconstructed))
+      
         return mse_loss(input_images, reconstructed)
-        # huber = keras.losses.Huber(delta=1.0)
-        # loss = huber(input_images, reconstructed)
-       # return loss
 
 
 #===================================    class methods ==========================
@@ -392,8 +394,13 @@ class DynamicVAE(keras.Model):
 
 
     @classmethod
-    def load_model(cls, model_name):
-        file_path = f"{os.getcwd()}/trained_models/{model_name}.pkl"
+    def load_model(cls, model_name, path=None):
+        if path == None:
+
+            file_path = f"{os.getcwd()}/trained_models/{model_name}.pkl"
+        else:
+            file_path = path
+
         if os.path.exists(file_path) == False:
             print(tool_box.color_string('red', f'\n\nNO MODEL CONFIGS FOUND @ PATH: {file_path}\n\n'))
             return None
@@ -454,6 +461,7 @@ class DynamicVAE(keras.Model):
             
                 print(tool_box.color_string('red', f"\n\nMAX PATIENCE EXCEEDED TERMINATING\n\n"))
                 self.stop_training = True
+                #self.update_weights()
                 return None
             else:
 
@@ -495,8 +503,10 @@ class DynamicVAE(keras.Model):
         print("\n\n")
 
         self.max_loss = max_loss
-        #set current loss
-     
+
+
+
+ 
         return None
 
 
@@ -508,12 +518,12 @@ class DynamicVAE(keras.Model):
 
 
 
-# (x_train, y_train), (x_test, y_test) = cifar10.load_data()
-# x_train = x_train.astype("float32")/255.0
-# x_test = x_test.astype("float32")/255.0
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+x_train = x_train.astype("float32")/255.0
+x_test = x_test.astype("float32")/255.0
 
 
-(X_train, y_train), (X_test, y_test) = tool_box.load_tf_dataset("tf_flowers")
+# (X_train, y_train), (X_test, y_test) = tool_box.load_tf_dataset("tf_flowers")
 
 
 
@@ -530,46 +540,48 @@ learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
 
 
 
-# optimizer = keras.optimizers.Adam
+optimizer = keras.optimizers.Adam
 
-# latent_dims = 256
-# batch_size = 1028
-# epochs = 2
+latent_dims = 256
+batch_size = 1028
+epochs = 5
 # #model_name = f"{latent_dims}_dim_{latent_dims}_bs_{batch_size}_vae_VGG_BLOCKS_ADDED"
-# #model_name = f"test"
+# #model_name = f"test"#
+#model_name = f"no_eager"
+model_name = "eager"
 
-# vae = DynamicVAE(model_name=model_name,
-#                  optimizer_fn=optimizer,
-#                  learning_rate=learning_rate,
-#                  latent_dims=latent_dims,
-#                  kl_beta=0.01
-# )
-
-
-
-# model_path = f"./trained_models/{model_name}.pkl"
+vae = DynamicVAE(model_name=model_name,
+                 optimizer_fn=optimizer,
+                 learning_rate=learning_rate,
+                 latent_dims=latent_dims,
+                 kl_beta=0.01
+)
 
 
 
 
-# vae.fit(x_train,
-#         epochs=epochs,
-#         batch_size=batch_size,
-#         callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: vae._early_stop(epoch, logs))]
-# )
 
 
-# vae.save(model_path)
-
-model_name = "256_dim_256_bs_32_vae_VGG_BLOCKS_ADDED"
-
-vae = DynamicVAE.load_model(model_name)
 
 
-for i in range(10):
+vae.fit(x_train,
+        epochs=epochs,
+        batch_size=batch_size,
+        callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: vae._early_stop(epoch, logs))]
+)
 
-    test_image = X_test[i:i+1]
-    vae.reconstruct_image(test_image)
+save_path = f"./trained_models/{model_name}.pkl"
+vae.save(save_path)
+
+# model_name = "256_dim_256_bs_32_vae_VGG_BLOCKS_ADDED"
+
+# vae = DynamicVAE.load_model(model_name)
+
+
+# for i in range(10):
+
+#     test_image = X_test[i:i+1]
+#     vae.reconstruct_image(test_image)
 
 
 
