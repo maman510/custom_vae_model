@@ -1,3 +1,5 @@
+import keras.callbacks
+import keras.optimizers
 from multistep_dataset import MultistepDataset
 import math
 import tool_box
@@ -55,7 +57,7 @@ class HyperModel:
             return best_params
 
     def _check_epoch(self, epoch, logs, hyperparams_path=None):
-        print(tool_box.color_string('green', f"\n{self.model_name}.....\n"))
+        #print(tool_box.color_string('green', f"\n{self.model_name}.....\n"))
         val_loss = logs["val_loss"]
         if hyperparams_path == None:
             params_path = f"{os.getcwd()}/hyperparameters/{self.model_name}_best_params.pkl"
@@ -112,7 +114,7 @@ class HyperModel:
         
 
                 
-    def run_grid_search(self, df, n_steps_in, n_steps_out, n_stride=1, max_trials=50,hyperparams_path=None):
+    def run_grid_search(self, df, n_steps_in, n_steps_out, n_stride=1, max_trials=1, epochs=5000, hyperparams_path=None):
         
         
         self.n_steps_in = n_steps_in
@@ -173,7 +175,7 @@ class HyperModel:
          ]
         
         #initialize tuner search using scaled data; set epochs as high as possible - early stopping will limit runs
-        self.tuner.search(dataset.scaled_X_train, dataset.scaled_y_train,validation_split=0.2 , epochs=5000, callbacks=cb)
+        self.tuner.search(dataset.scaled_X_train, dataset.scaled_y_train,validation_split=0.2 , epochs=epochs, callbacks=cb)
 
         #after search is complete, return best model found during search by tuner
         best_model = self.tuner.get_best_models(num_models=1)[0]
@@ -226,83 +228,63 @@ class HyperModel:
         return self.model
 
 
-    def best_param_predictions(self, symbol, n_steps_in, n_steps_out, target_date=None,future_forecast=False):
+    def best_param_predictions(self, df, n_steps_in, n_steps_out, n_stride):
      
-        if target_date != None and future_forecast != False:
-            print(tool_box.color_string("red", f"\n\ntWARNING: YOU ARE PASSING target_date AS PAST DATE AND future_forecast AS TRUE"))
+
+        configs_path = f"{os.getcwd()}/hyperparameters/{self.model_name}_best_params.pkl"
+
+        
+        #check if configs created by run_grid_search exist; if not, return none and exit (need to run grid_search_first)
+        if os.path.exists(configs_path) == False:
+            print(tool_box.color_string('red',f"\n\n\tNO MODEL CONFIGS FOUND AT  PATH: {configs_path}\nUSE 'run_grid_search' to generate new configs and run prediction again\n"))
             return None
-           
+        
         else:
-            configs_path = f"{os.getcwd()}/hyperparameters/{self.model_name}_best_params.pkl"
-            #check if configs created by run_grid_search exist; if not, return none and exit (need to run grid_search_first)
-            if os.path.exists(configs_path) == False:
-                print(tool_box.color_string('red',f"\n\n\tNO MODEL CONFIGS FOUND AT  PATH: {configs_path}\nUSE 'run_grid_search' to generate new configs and run prediction again\n"))
+            print(tool_box.color_string('green',f"\n\n\tLOADING MODEL FROM CONFIG"))
+            #set model in load_from_config function
+            self.load_from_config(configs_path)
+            #compile self.model with config text params
+            optimizers = {"Nadam": keras.optimizers.Nadam, "Adam": keras.optimizers.Adam}
+            learning_rate = self.config_text["learning_rate"]
+            optimizer = optimizers[self.config_text["optimizer"]]
+            loss = self.config_text["loss_function"]
+            self.best_params = self.model.to_json()
+            self.model.compile(loss=loss, optimizer=optimizer(learning_rate=learning_rate))
+        
+
+            #load dataset
+            dataset = MultistepDataset(df, n_steps_in, n_steps_out, n_stride)
+      
+            if type(dataset) != MultistepDataset:
+                print(tool_box.color_string("red", f"ERROR: CHECK MULTISTEP STATUS RETURNED AS FALSE\n"))
                 return None
-            
+            elif dataset.status == False:
+                print(tool_box.color_string("red", f"ERROR: CHECK MULTISTEP STATUS RETURNED AS FALSE\n"))
+                return None
             else:
-                print(tool_box.color_string('green',f"\n\n\tLOADING MODEL FROM CONFIG"))
-                #set model in load_from_config function
-                self.load_from_config(configs_path)
-                #compile self.model with config text params
-                optimizers = {"Nadam": keras.optimizers.Nadam, "Adam": keras.optimizers.Adam}
-                learning_rate = self.config_text["learning_rate"]
-                optimizer = optimizers[self.config_text["optimizer"]]
-                loss = self.config_text["loss_function"]
-                self.best_params = self.model.to_json()
-                self.model.compile(loss=loss, optimizer=optimizer(learning_rate=learning_rate))
-         
+                self.model.summary()
+                
+                #set training params
+                self.best_epochs = 100000
+                cb = [keras.callbacks.EarlyStopping(monitor="loss", min_delta=0.05, patience=5, start_from_epoch=2, restore_best_weights=True)]
+                print(tool_box.color_string('yellow', "\n\nSTARTING PREDICTION WITH X_TEST: \n"))
+                reverted_X_test = dataset.scaler.inverse_transform(dataset.scaled_X_test.reshape(-1, dataset.feature_count))
+                print(pd.DataFrame(reverted_X_test.reshape(-1, dataset.feature_count), columns=dataset.numerical_columns, index=dataset.X_test_indices[0])) 
+                #train model with scaled data
+                self.model.fit(dataset.scaled_X_train, dataset.scaled_y_train, validation_split=0.1, epochs=self.best_epochs, callbacks=cb)
 
-                #load dataset
-                dataset = MultistepDataset(symbol, n_steps_in, n_steps_out)
+                #use training model to make prediction with scaled X_test
+                pred = self.model.predict(dataset.scaled_X_test).reshape(-1, dataset.feature_count)
+           
+                #use dataset scaler to inverse transform dataset unscaled form
+                reverted_pred = dataset.scaler.inverse_transform(pred)
+                #use reverted prediction data to restore dataframe form
+                prediction_dataframe = pd.DataFrame(reverted_pred, columns=dataset.numerical_columns, index=dataset.y_test_indices[0])
 
-                if type(dataset) != MultistepDataset:
-                    print(tool_box.color_string("red", f"ERROR: CHECK MULTISTEP STATUS RETURNED AS FALSE\n"))
-                    return None
-                elif dataset.status == False:
-                    print(tool_box.color_string("red", f"ERROR: CHECK MULTISTEP STATUS RETURNED AS FALSE\n"))
-                    return None
-                else:
-                    self.model.summary()
-                    
-                    #set training params
-                    self.best_epochs = 100000
-                    cb = [keras.callbacks.EarlyStopping(monitor="loss", min_delta=0.05, patience=5, start_from_epoch=2, restore_best_weights=True)]
-
-                    #train model with scaled data
-                    self.model.fit(dataset.scaled_X_train, dataset.scaled_y_train, validation_data=(dataset.scaled_X_val, dataset.scaled_y_val), epochs=self.best_epochs, callbacks=cb)
-
-                    #use training model to make prediction with scaled X_test
-                    pred = self.model.predict(dataset.scaled_X_test).reshape(-1, dataset.feature_count)
-
-                    #create new df that contains output of prediction + actual prices
-                    
-                    #set pred_df columns to same as dataset.prices and index set to dataset.X_test_indices
-                    pred_df = pd.DataFrame(dataset.scaler.inverse_transform(pred), columns=[f'predicted_{c}' for c in dataset.prices.columns],index=dataset.X_test_indices)
-                    
-                    #remove ratio columns and keep only price related cols:  predicted_open  predicted_high  predicted_low  predicted_close  predicted_adjClose  predicted_volume  predicted_unadjustedVolume  predicted_change  predicted_changePercent  predicted_vwap
-                    pred_df = pred_df[[f"predicted_{c}" for c in dataset.price_cols if f"predicted_{c}" in pred_df.columns]]
-                    
-                    #subset original prices (original prices with no altered/removed data) using pred_df index and columns
-                    prices_df = dataset.original_prices.loc[pred_df.index,dataset.prices.columns]
-                    prices_df = prices_df.rename(columns={c: f'actual_{c}' for c in prices_df.columns})
-
-                    #remove ratio columns from actual price_data (same as pred_df)
-                    prices_df = prices_df[[f"actual_{c}" for c in dataset.price_cols if f"actual_{c}" in prices_df.columns]]
-
-                    #prepare both dataframes for combining by droping columns
-                    prices_df = prices_df.reset_index().drop(['index'], axis=1)
-                    pred_df = pred_df.reset_index().drop(['index'], axis=1)
-                   
-                    #combine Dataframes
-                    df = pd.concat([pred_df, prices_df], axis=1)
-                   
-                    #create alternating actual/predicted columns so related data are presented next to eachother (ex: actual_prices, predicted_prices)
-                    alternating_cols = np.vstack((pred_df.columns,prices_df.columns)).ravel('F')     
-                    df = df[alternating_cols]
-
-                    #set combined_df index to X_test indices (target output dates)
-                    df.index = dataset.X_test_indices
-                    return df
+                return prediction_dataframe
+                                
+                                
+                
     
 
     def load_from_config(self,configs_path=None):
@@ -329,11 +311,12 @@ class HyperModel:
         for k, v in self.config_text.items():
             print(tool_box.color_string("yellow", k),":", v)
         print("\n")
+    
+
       
 
 
 original_df = tool_box.Load_Pkl("aapl.pkl")
-
 #print(original_df.columns)
 
 steps_in = 5
@@ -341,14 +324,17 @@ steps_out = 5
 stride = 1
 
 
-#multistep_dataset = MultistepDataset(original_df, steps_in, steps_out, stride)
-
 
 model = HyperModel("test")
-model.run_grid_search(df=original_df,
-                      n_steps_in=steps_in,
-                      n_steps_out=steps_out,
-                      n_stride=stride)
+# model.run_grid_search(df=original_df,
+#                       n_steps_in=steps_in,
+#                       n_steps_out=steps_out,
+#                       n_stride=stride,
+#                       epochs=2)
+
+prediction = model.best_param_predictions(original_df, steps_in, steps_out, stride)
+# print(prediction)
+
 
 
 
