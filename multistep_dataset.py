@@ -4,6 +4,8 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import pandas as pd
 import sys
+import shutil
+
 
 class MultistepDataset:
 
@@ -21,49 +23,54 @@ class MultistepDataset:
     
 
     def display_data(self):
-            
+            terminal_size = shutil.get_terminal_size()
+            width = terminal_size.columns
+            height = terminal_size.lines
+            centered_space = " " * (width//4)
+
+
             #========== X_train ==========
-            print(f"\nORIGINAL X_TRAIN (head):\n")
-            print(pd.DataFrame(self.X_train.reshape(self.scaled_X_train.shape)).head())
-            print(f"\nSCALED_X_TRAIN (head):\n")
-            print(pd.DataFrame(self.scaled_X_train).head())
-            print(f"\nREVERTED SCALED_X_TRAIN (head):\n")
-            reverted_X_train = self.scaler.inverse_transform(self.scaled_X_train)
-            print(pd.DataFrame(reverted_X_train).head())
+            print(f"\n{centered_space}ORIGINAL X_TRAIN (head):\n")
+            print(pd.DataFrame(self.X_train.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}SCALED_X_TRAIN (head):\n")
+            print(pd.DataFrame(self.scaled_X_train.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}REVERTED SCALED_X_TRAIN (head):\n")
+            reverted_X_train = self.scaler.inverse_transform(self.scaled_X_train.reshape(-1, self.feature_count))
+            print(pd.DataFrame(reverted_X_train.reshape(-1, self.feature_count)).head())
 
             #=========== y_train ==================
-            print(f"\nORIGINAL y_TRAIN (head):\n")
-            print(pd.DataFrame(self.y_train.reshape(self.scaled_y_train.shape)).head())
-            print(f"\nSCALED_y_TRAIN (head):\n")
-            print(pd.DataFrame(self.scaled_y_train).head())
-            print(f"\nREVERTED SCALED_y_TRAIN (head):\n")
-            reverted_y_train = self.scaler.inverse_transform(self.scaled_y_train)
-            print(pd.DataFrame(reverted_y_train).head())
+            print(f"\n{centered_space}ORIGINAL y_TRAIN (head):\n")
+            print(pd.DataFrame(self.y_train.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}SCALED_y_TRAIN (head):\n")
+            print(pd.DataFrame(self.scaled_y_train.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}REVERTED SCALED_y_TRAIN (head):\n")
+            reverted_y_train = self.scaler.inverse_transform(self.scaled_y_train.reshape(-1, self.feature_count))
+            print(pd.DataFrame(reverted_y_train.reshape(-1, self.feature_count)).head())
 
 
             #========== X_test ========================
-            print(f"\nORIGINAL X_TEST (head):\n")
-            print(pd.DataFrame(self.X_test.reshape(self.scaled_X_test.shape)).head())
-            print(f"\nSCALED_X_TEST (head):\n")
-            print(pd.DataFrame(self.scaled_X_test).head())
-            print(f"\nREVERTED SCALED_X_TEST (head):\n")
-            reverted_X_test = self.scaler.inverse_transform(self.scaled_X_test)
-            print(pd.DataFrame(reverted_X_test).head())    
+            print(f"\n{centered_space}ORIGINAL X_TEST (head):\n")
+            print(pd.DataFrame(self.X_test.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}SCALED_X_TEST (head):\n")
+            print(pd.DataFrame(self.scaled_X_test.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}REVERTED SCALED_X_TEST (head):\n")
+            reverted_X_test = self.scaler.inverse_transform(self.scaled_X_test.reshape(-1, self.feature_count))
+            print(pd.DataFrame(reverted_X_test.reshape(-1, self.feature_count)).head())    
 
             #========== y_test ========================
-            print(f"\nORIGINAL y_TEST (head):\n")
-            print(pd.DataFrame(self.y_test.reshape(self.scaled_y_test.shape)).head())
-            print(f"\nSCALED_y_TEST (head):\n")
-            print(pd.DataFrame(self.scaled_y_test).head())
-            print(f"\nREVERTED SCALED_y_TEST (head):\n")
-            reverted_y_test = self.scaler.inverse_transform(self.scaled_y_test)
-            print(pd.DataFrame(reverted_y_test).head())
+            print(f"\n{centered_space}ORIGINAL y_TEST (head):\n")
+            print(pd.DataFrame(self.y_test.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}SCALED_y_TEST (head):\n")
+            print(pd.DataFrame(self.scaled_y_test.reshape(-1, self.feature_count)).head())
+            print(f"\n{centered_space}REVERTED SCALED_y_TEST (head):\n")
+            reverted_y_test = self.scaler.inverse_transform(self.scaled_y_test.reshape(-1, self.feature_count))
+            print(pd.DataFrame(reverted_y_test.reshape(-1, self.feature_count)).head())
 
             #============ DISPLAY LAST INPUT/OUTPUT INDICES IN TRAIN/TEST =======
-            print(tool_box.color_string('green', f"\n\tLAST INPUT INDEX OF X_TRAIN DATA ({self.steps_in} steps_in): \n"),  f"{self.X_train_df_windows[-1]}")
-            print(tool_box.color_string('green', f"\n\tLAST OUTPUT INDEX OF y_TRAIN DATA  ({self.steps_out} steps_out): \n"), f"{self.y_train_df_windows[-1]}\n")
-            print(tool_box.color_string('red', f"\n\tLAST INPUT INDEX OF X_TEST DATA: ({self.steps_in} steps_in): \n"), f"{self.X_test_df_windows[-1]}")
-            print(tool_box.color_string('red', f"\n\tLAST OUTPUT INDEX OF Y_TEST DATA:  ({self.steps_out} steps_out): \n"), f"{self.y_test_df_windows[-1]}\n\n")
+            print(tool_box.color_string('green', f"\n{centered_space}LAST INPUT INDEX OF X_TRAIN DATA ({self.steps_in} steps_in): \n"),  f"{self.X_train_df_windows[-1]}")
+            print(tool_box.color_string('green', f"\n{centered_space}LAST OUTPUT INDEX OF y_TRAIN DATA  ({self.steps_out} steps_out): \n"), f"{self.y_train_df_windows[-1]}\n")
+            print(tool_box.color_string('red', f"\n{centered_space}LAST INPUT INDEX OF X_TEST DATA: ({self.steps_in} steps_in): \n"), f"{self.X_test_df_windows[-1]}")
+            print(tool_box.color_string('red', f"\n{centered_space}LAST OUTPUT INDEX OF Y_TEST DATA:  ({self.steps_out} steps_out): \n"), f"{self.y_test_df_windows[-1]}\n\n")
 
     def _load_multistep_data(self):
     
@@ -124,6 +131,8 @@ class MultistepDataset:
             X_train = np.array([df.values for df in self.X_train_df_windows])
             y_train = np.array([df.values for df in self.y_train_df_windows])
 
+            self.original_X_train_shape = X_train.shape
+
             X_test = np.array([df.values for df in self.X_test_df_windows])
             y_test = np.array([df.values for df in self.y_test_df_windows])
 
@@ -141,54 +150,27 @@ class MultistepDataset:
             self.scaler = StandardScaler()
             self.scaler.fit(numerical_data)
 
-            self.scaled_X_train = self.scaler.transform(self.X_train.reshape(-1, self.feature_count))
-            self.scaled_y_train = self.scaler.transform(self.y_train.reshape(-1, self.feature_count))
+            self.scaled_X_train = self.scaler.transform(self.X_train.reshape(-1, self.feature_count)).reshape(self.original_shape)
+            self.scaled_y_train = self.scaler.transform(self.y_train.reshape(-1, self.feature_count)).reshape(self.original_shape)
 
-            self.scaled_X_test = self.scaler.transform(self.X_test.reshape(-1, self.feature_count))
-            self.scaled_y_test = self.scaler.transform(self.y_test.reshape(-1, self.feature_count))
+            self.scaled_X_test = self.scaler.transform(self.X_test.reshape(-1, self.feature_count)).reshape(self.original_shape)
+            self.scaled_y_test = self.scaler.transform(self.y_test.reshape(-1, self.feature_count)).reshape(self.original_shape)
 
             #set status to true
             self.status = True
-           # print(self.scaled_X_train)
-            #print(self.X_train)
 
-            # else:
-            #     self.X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], self.feature_count))
-            #     self.y_train = y_train.reshape((y_train.shape[0], y_train.shape[1], self.feature_count))
 
-            #     self.X_val = X_val.reshape((X_val.shape[0], X_val.shape[1], self.feature_count))
-            #     self.y_val = y_val.reshape((y_val.shape[0], y_val.shape[1], self.feature_count))
-            #     #scale data
-               
-            #     #save original shape to restore later
-            #     self.original_shape = (-1, self.X_train.shape[1], self.X_train.shape[2])
-            #     self.X_train = self.X_train.reshape(-1, self.feature_count)
-            #     self.X_test = self.X_test.reshape(-1, self.feature_count)
-            #     self.X_val = self.X_val.reshape(-1, self.feature_count)
-            #     self.y_train = self.y_train.reshape(-1, self.feature_count)
-            #     self.y_val = self.y_val.reshape(-1, self.feature_count)
-            #     self.y_test = self.y_test.reshape(-1, self.feature_count)
-
-            #     self.scaler = StandardScaler()
-            #     self.scaler.fit(self.data.values)
-
-            #     self.scaled_X_train = self.scaler.transform(self.X_train).reshape(self.original_shape)
-            #     self.scaled_X_test = self.scaler.transform(self.X_test).reshape(self.original_shape)
-            #     self.scaled_X_val = self.scaler.transform(self.X_val).reshape(self.original_shape)
-            #     self.scaled_y_train = self.scaler.transform(self.y_train).reshape(self.original_shape)
-            #     self.scaled_y_val = self.scaler.transform(self.y_val).reshape(self.original_shape)
-            #     self.scaled_y_test = self.scaler.transform(self.y_test).reshape(self.original_shape)
-
-            #     self.status = True
                 
-                
-
 original_df = tool_box.Load_Pkl("aapl.pkl")
-steps_in = 4
-steps_out = 2
+
+#print(original_df.columns)
+
+steps_in = 5
+steps_out = 5
 stride = 1
 
 
 multistep_dataset = MultistepDataset(original_df, steps_in, steps_out, stride)
 
-#multistep_dataset.display_data()
+print(multistep_dataset.scaled_X_train.shape, multistep_dataset.scaled_y_train.shape)
+multistep_dataset.display_data()
