@@ -439,8 +439,16 @@ def build_vae(hp,model_name="dummy_name"):
 x_train = x_train.astype("float32")/255.0
 x_test = x_test.astype("float32")/255.0
 
-
+#stochastic/random  - 
 tuner = kt.BayesianOptimization(
+    build_vae,
+    objective='val_loss',  # Objective to optimize
+    max_trials=10,
+    directory='hp_results',
+    project_name='vae_hyperparameter_tuning'
+)
+#gradient
+tuner = kt.GridSearch(
     build_vae,
     objective='val_loss',  # Objective to optimize
     max_trials=10,
